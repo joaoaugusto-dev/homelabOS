@@ -106,8 +106,6 @@ const SCOPE = (o) => (o === "shared" ? "Compartilhado" : "Privado");
 let filter = "all";
 
 function visible(a) { return filter === "all" || (filter === "mine" ? a.owner === D.me : a.owner === "shared"); }
-// apps servidos por HTTPS via `tailscale serve` (id do app -> nome na tailnet)
-const TS_URL = {};
 function appCard(a) {
   const busy = a.state === "building";
   const st = a.state === "running" ? `Rodando há ${upFor(a.started)}` : STATE[a.state];
@@ -115,7 +113,7 @@ function appCard(a) {
   const net = a.expose && a.state === "running";
   const portLine = h("div", {}, icon("lock"), h("span", {}, net ? ["Rede local · ", h("a", { href: `http://${location.hostname}:${a.port}`, target: "_blank", rel: "noopener" }, `${location.hostname}:${a.port}`)] : `${a.expose ? "Na rede" : "Só neste servidor"} · porta ${a.port}`));
   const lines = h("div", { class: "acard-l" },
-    a.host ? h("div", {}, icon("globe"), h("a", { href: `https://${a.host}`, target: "_blank", rel: "noopener" }, a.host)) : TS_URL[a.id] ? h("div", {}, icon("globe"), h("a", { href: `https://${TS_URL[a.id]}`, target: "_blank", rel: "noopener" }, TS_URL[a.id])) : null,
+    a.host ? h("div", {}, icon("globe"), h("a", { href: `https://${a.host}`, target: "_blank", rel: "noopener" }, a.host)) : null,
     portLine,
     h("div", {}, icon("rocket"), h("span", {}, a.commit ? [a.zip ? null : h("code", {}, a.commit.slice(0, 7)), `${a.zip ? "" : " "}${a.msg}`, ` · ${ago(a.deployed)}`] : "Nenhum deploy ainda")),
     h("div", {}, icon("layers"), h("span", {}, `${a.zip ? `Arquivo: ${a.upname || "nenhum enviado"}` : `${a.repo} · ${a.branch}`} · ${a.rt === "podman" ? "container" : a.rt === "native" ? "processo" : a.runtime === "podman" ? "container" : a.runtime === "native" ? "processo" : "automático"}`)),
