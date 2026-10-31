@@ -10,7 +10,7 @@ if [ "${1:-}" = "--remote" ]; then                                   # ---------
   SRC=$(cd "$2" && pwd); HOURS=$3; D=${OS_DIR:-$HOME/homelabOS}; CONF=$D/homelab.conf
   step() { printf '\n==> %s\n' "$*"; }
   [ -x "$D/homelabos" ] && [ -f "$CONF" ] || { echo "Não achei o homelabOS em $D"; exit 1; }
-  grep -q '^manager=' "$CONF" || { echo "O homelab.conf não tem manager= (rode antes deploy/upgrade-existing.sh --manager NOME)"; exit 1; }
+  grep -q '^manager=' "$CONF" || { echo "O homelab.conf não tem manager= (adicione a linha manager=NOME e reinicie o homelabOS)"; exit 1; }
   B=$(mktemp -d); trap 'rm -rf "$B"' EXIT
   step "Compilando"; gcc -O2 -Wall -Wextra -Wno-format-truncation -pthread -o "$B/homelabos" "$SRC/homelabos/server.c"; echo "   ok"
   step "Backup em ~/backup-invite-$(date +%Y%m%d-%H%M%S)"
