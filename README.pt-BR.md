@@ -14,6 +14,14 @@ Mais: [login](docs/screens/login.png) · [sistema](docs/screens/os-sistema.png) 
 
 ## Começando
 
+**Deixe um agente de IA instalar.** Cole este link no seu agente (Claude Code, Codex etc.) na máquina onde quer instalar. Ele lê o hardware, faz poucas perguntas, compila, instala e ajusta a configuração para aquela máquina. As senhas e o `sudo` ficam com você.
+
+```
+https://raw.githubusercontent.com/joaoaugusto-dev/homelabOS/main/INSTALL-AGENT.md
+```
+
+Ou instale à mão:
+
 Precisa de Linux, `gcc` e `make`. A Hospedagem usa também `git`, `curl`, `python3` e, opcionalmente, `podman`, PostgreSQL, MariaDB e `cloudflared`.
 
 ```sh

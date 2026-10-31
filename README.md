@@ -16,6 +16,14 @@ More: [login](docs/screens/login.png) Â· [system](docs/screens/os-sistema.png) Â
 
 ## Quick start
 
+**Let an AI agent do it.** Paste this link into your coding agent (Claude Code, Codex, etc.) on the machine you want to install on. It inspects the hardware, asks a few questions, then builds, installs and tunes the configuration for that machine. Passwords and `sudo` stay with you.
+
+```
+https://raw.githubusercontent.com/joaoaugusto-dev/homelabOS/main/INSTALL-AGENT.md
+```
+
+Or install by hand:
+
 Requirements: Linux, `gcc`, `make`. Hosting also uses `git`, `curl`, `python3`, and optionally `podman`, PostgreSQL, MariaDB and `cloudflared`.
 
 ```sh
