@@ -1,0 +1,230 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#000000">
+<title>Hospedagem · homelabOS</title>
+<link rel="icon" href="/icons/hosting.svg">
+<link rel="preload" href="/fonts/geist.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <defs>
+    <symbol id="i-layers" viewBox="0 0 24 24"><path d="m12 4 8.5 4.5L12 13 3.5 8.5zM3.5 12.5 12 17l8.5-4.5M3.5 16.5 12 21l8.5-4.5"/></symbol>
+    <symbol id="i-db" viewBox="0 0 24 24"><ellipse cx="12" cy="6" rx="7" ry="2.7"/><path d="M5 6v6c0 1.5 3.1 2.7 7 2.7s7-1.2 7-2.7V6M5 12v6c0 1.5 3.1 2.7 7 2.7s7-1.2 7-2.7v-6"/></symbol>
+    <symbol id="i-globe" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><ellipse cx="12" cy="12" rx="3.6" ry="8.5"/><path d="M3.5 12h17"/></symbol>
+    <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+    <symbol id="i-edit" viewBox="0 0 24 24"><path d="M4 20h4L19 9l-4-4L4 16zM13.5 6.5l4 4"/></symbol>
+    <symbol id="i-trash" viewBox="0 0 24 24"><path d="M5 7h14M10 7V4.5h4V7M7 7l1 13h8l1-13M10.5 11v5.5M13.5 11v5.5"/></symbol>
+    <symbol id="i-ext" viewBox="0 0 24 24"><path d="M14 4h6v6M20 4l-9 9M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5"/></symbol>
+    <symbol id="i-x" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18"/></symbol>
+    <symbol id="i-out" viewBox="0 0 24 24"><path d="M14 4h5v16h-5M10 8l-4 4 4 4M6 12h9"/></symbol>
+    <symbol id="i-up" viewBox="0 0 24 24"><path d="M12 20V9m0 0-4.5 4.5M12 9l4.5 4.5M5 4h14"/></symbol>
+    <symbol id="i-pulse" viewBox="0 0 24 24"><path d="M3 12h4l2.5-6 4 12 2.5-6H21"/></symbol>
+    <symbol id="i-play" viewBox="0 0 24 24"><path d="M8 5.5v13l11-6.5z"/></symbol>
+    <symbol id="i-stop" viewBox="0 0 24 24"><rect x="6.5" y="6.5" width="11" height="11" rx="1.5"/></symbol>
+    <symbol id="i-redo" viewBox="0 0 24 24"><path d="M19.5 12a7.5 7.5 0 1 1-2.3-5.4M19.5 4.5v4h-4"/></symbol>
+    <symbol id="i-term" viewBox="0 0 24 24"><rect x="3.5" y="5" width="17" height="14" rx="2"/><path d="m7.5 10 3 2-3 2M13 14.5h3.5"/></symbol>
+    <symbol id="i-rocket" viewBox="0 0 24 24"><path d="M12 3.5c3.2 1.8 5 5 5 8.5l-2.5 3h-5L7 12c0-3.5 1.8-6.7 5-8.5zM9.5 15l-2 4.5L12 18l4.5 1.5-2-4.5"/></symbol>
+    <symbol id="i-copy" viewBox="0 0 24 24"><rect x="8.5" y="8.5" width="11" height="11" rx="2"/><path d="M15.5 8.5V6a1.5 1.5 0 0 0-1.5-1.5H6A1.5 1.5 0 0 0 4.5 6v8A1.5 1.5 0 0 0 6 15.5h2.5"/></symbol>
+    <symbol id="i-eye" viewBox="0 0 24 24"><path d="M2.5 12S6 5.5 12 5.5 21.5 12 21.5 12 18 18.5 12 18.5 2.5 12 2.5 12z"/><circle cx="12" cy="12" r="2.7"/></symbol>
+    <symbol id="i-chart" viewBox="0 0 24 24"><path d="M5 20v-8M12 20V5M19 20v-11"/></symbol>
+    <symbol id="i-lock" viewBox="0 0 24 24"><rect x="5.5" y="10.5" width="13" height="9" rx="2"/><path d="M8.5 10.5V8a3.5 3.5 0 0 1 7 0v2.5"/></symbol>
+  </defs>
+</svg>
+
+<!-- sem sessão no painel -->
+<div class="login" id="gate" hidden>
+  <div class="login-card">
+    <div class="mark" aria-hidden="true"><svg viewBox="0 0 24 24"><use href="#i-layers"/></svg></div>
+    <h1>Hospedagem</h1>
+    <p class="muted">Aqui o login é o mesmo do painel do servidor. Entre nele e volte para cá, que esta tela abre sozinha.</p>
+    <a class="btn primary block" id="gate-link" href="/">Abrir o painel</a>
+  </div>
+</div>
+
+<div class="app" id="app" hidden>
+  <aside class="side">
+    <div class="brand">
+      <div class="mark" aria-hidden="true"><svg viewBox="0 0 24 24"><use href="#i-layers"/></svg></div>
+      <span>Hospedagem</span>
+    </div>
+    <nav class="nav" id="nav" aria-label="Seções">
+      <a href="#apps" data-v="apps"><svg class="ic"><use href="#i-layers"/></svg><span>Aplicações</span></a>
+      <a href="#estatisticas" data-v="estatisticas"><svg class="ic"><use href="#i-chart"/></svg><span>Estatísticas</span></a>
+      <a href="#bancos" data-v="bancos"><svg class="ic"><use href="#i-db"/></svg><span>Bancos</span></a>
+      <a href="#dominios" data-v="dominios"><svg class="ic"><use href="#i-globe"/></svg><span>Domínios</span></a>
+    </nav>
+    <div class="side-foot">
+      <div class="host">
+        <a class="link small" id="back" href="/">← Voltar ao painel</a>
+        <div class="side-user small" id="side-user"></div>
+      </div>
+    </div>
+  </aside>
+
+  <main class="main">
+    <header class="top">
+      <h1 id="title">Aplicações</h1>
+      <div class="top-r">
+        <span class="pill" id="tun" title="Cloudflare Tunnel"><span class="dot"></span><span id="tun-t">Túnel</span></span>
+      </div>
+    </header>
+
+    <!-- aplicações -->
+    <section class="view" id="v-apps" hidden>
+      <div class="toolbar">
+        <div class="seg" id="f-apps" role="group" aria-label="Filtro">
+          <button data-f="all" class="on">Todas</button><button data-f="mine">Minhas</button><button data-f="shared">Compartilhadas</button>
+        </div>
+        <button class="btn primary" id="app-new"><svg class="ic s"><use href="#i-plus"/></svg>Nova aplicação</button>
+      </div>
+      <div class="cards" id="apps"></div>
+    </section>
+
+    <!-- estatísticas -->
+    <section class="view" id="v-estatisticas" hidden>
+      <div class="toolbar">
+        <label class="sel"><select id="st-app" aria-label="Aplicação"></select></label>
+        <div class="seg" id="st-range" role="group" aria-label="Período">
+          <button data-r="24h" class="on">24 horas</button><button data-r="7d">7 dias</button><button data-r="30d">30 dias</button>
+        </div>
+      </div>
+      <div id="st-body"></div>
+    </section>
+
+    <!-- bancos -->
+    <section class="view" id="v-bancos" hidden>
+      <div class="toolbar">
+        <div class="notes" id="db-notes"></div>
+        <button class="btn primary" id="db-new"><svg class="ic s"><use href="#i-plus"/></svg>Novo banco</button>
+      </div>
+      <div class="cards" id="dbs"></div>
+    </section>
+
+    <!-- domínios -->
+    <section class="view" id="v-dominios" hidden>
+      <div class="toolbar">
+        <div class="notes muted">Digite o endereço ao criar a aplicação: o servidor cria o registro no Cloudflare e liga ao túnel.</div>
+        <button class="btn primary" id="dom-new"><svg class="ic s"><use href="#i-plus"/></svg>Adicionar domínio</button>
+      </div>
+      <div class="cards" id="doms"></div>
+      <article class="card hook">
+        <div class="card-h"><span>Deploy automático pelo GitHub</span><span class="tag" id="hook-tag">—</span></div>
+        <p class="muted small">Para o GitHub avisar a cada push, o servidor precisa de um endereço público só para receber webhooks (nada mais do painel fica exposto por ele). Sem isso, o servidor confere o GitHub a cada 2 minutos e faz o deploy do mesmo jeito.</p>
+        <form class="inline" id="hook-form">
+          <label class="field grow"><span>Endereço de webhooks</span><input id="hook-host" placeholder="hooks.seudominio.com" autocomplete="off" spellcheck="false" autocapitalize="none"></label>
+          <button class="btn primary" type="submit">Salvar</button>
+        </form>
+        <p class="form-error" id="hook-err" role="alert"></p>
+      </article>
+    </section>
+  </main>
+</div>
+
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+<!-- aplicação: criar / editar -->
+<dialog id="dlg-app">
+  <form class="dlg wide" id="app-form" autocomplete="off">
+    <div class="dlg-head"><h2 id="app-t">Nova aplicação</h2><button type="button" class="icon-btn" data-close aria-label="Fechar"><svg class="ic"><use href="#i-x"/></svg></button></div>
+    <div class="dlg-body">
+      <label class="field"><span>Nome</span><input name="name" required maxlength="60" placeholder="Meu site"></label>
+      <div class="field"><span>Quem vê e edita</span>
+        <div class="seg block" id="app-scope" role="group"><button type="button" data-s="private" class="on">Só eu</button><button type="button" data-s="shared">Nós dois</button></div>
+      </div>
+      <div class="field"><span>De onde vem o projeto</span>
+        <div class="seg block" id="app-src" role="group"><button type="button" data-k="github" class="on">GitHub</button><button type="button" data-k="zip">Arquivo (zip)</button></div>
+      </div>
+      <div id="src-gh" class="grp">
+        <div class="row2">
+          <label class="field"><span>Repositório do GitHub</span><input name="repo" placeholder="usuario/repositorio" spellcheck="false" autocapitalize="none"></label>
+          <label class="field"><span>Branch</span><input name="branch" placeholder="main" spellcheck="false" autocapitalize="none"></label>
+        </div>
+        <label class="field"><span>Token do GitHub <em>(só para repositório privado ou para criar o webhook)</em></span><input name="token" type="password" autocomplete="new-password"><small class="hint" id="tok-hint"></small></label>
+        <label class="check"><input type="checkbox" name="autodeploy" checked><span><b>Deploy automático</b><small>A cada push na branch, o servidor baixa, constrói e troca a versão.</small></span></label>
+      </div>
+      <div id="src-zip" class="grp" hidden>
+        <label class="field"><span>Arquivo do projeto <em>(.zip ou .tar.gz, até 500 MB)</em></span><input name="file" type="file" accept=".zip,.tar.gz,.tgz"><small class="hint" id="zip-hint">O servidor extrai, entende a estrutura (Dockerfile, Node, Python, Go ou site estático) e sobe. Pasta única por fora do zip é descartada.</small></label>
+      </div>
+      <label class="field"><span>Endereço público <em>(opcional)</em></span><input name="host" list="dom-list" placeholder="app.seudominio.com" spellcheck="false" autocapitalize="none"><datalist id="dom-list"></datalist><small class="hint">Termina em um dos seus domínios. O servidor cria o DNS e a rota sozinho.</small></label>
+      <label class="field"><span>Banco de dados <em>(opcional)</em></span><select name="db" id="app-db"></select><small class="hint">O app recebe DATABASE_URL, DB_HOST, DB_USER, DB_PASSWORD e DB_NAME.</small></label>
+      <label class="field"><span>Variáveis de ambiente <em>(uma por linha: NOME=valor)</em></span><textarea name="env" rows="3" spellcheck="false" placeholder="NODE_ENV=production"></textarea></label>
+      <details class="adv">
+        <summary>Execução avançada</summary>
+        <div class="adv-in">
+          <p class="muted" id="nat-note" hidden>Seu usuário roda aplicações só em container: coloque um Dockerfile na raiz do projeto.</p>
+          <label class="field"><span>Como rodar</span><select name="runtime"><option value="auto">Automático (container se tiver Dockerfile)</option><option value="podman">Container (Podman)</option><option value="native">Processo direto no servidor</option></select></label>
+          <label class="field"><span>Comando de build <em>(processo direto)</em></span><input name="build" placeholder="npm ci && npm run build" spellcheck="false"></label>
+          <label class="field"><span>Comando de início <em>(processo direto; a porta vem em $PORT)</em></span><input name="start" placeholder="npm start" spellcheck="false"></label>
+          <label class="field"><span>Porta no servidor <em>(vazio = automática)</em></span><input name="port" inputmode="numeric" placeholder="10000"></label>
+          <div class="row3">
+            <label class="field"><span>Porta no container</span><input name="cport" inputmode="numeric" placeholder="3000"></label>
+            <label class="field"><span>Memória (MB)</span><input name="mem" inputmode="numeric" placeholder="512"></label>
+            <label class="field"><span>Volume</span><input name="volume" placeholder="/data" spellcheck="false"></label>
+          </div>
+        </div>
+      </details>
+      <label class="check"><input type="checkbox" name="expose" checked><span><b>Acessível pela rede</b><small id="expose-hint">Abre em http://endereço-do-servidor:porta, sem precisar de domínio. Desmarcado, só o próprio servidor alcança.</small></span></label>
+      <label class="check" id="deploy-w"><input type="checkbox" name="deploy" checked><span><b>Fazer o deploy agora</b><small>Salva e já começa a construir.</small></span></label>
+      <p class="form-error" id="app-err" role="alert"></p>
+    </div>
+    <div class="dlg-b"><button type="button" class="btn" data-close>Cancelar</button><button class="btn primary" id="app-ok">Salvar</button></div>
+  </form>
+</dialog>
+
+<!-- logs, histórico e webhook -->
+<dialog id="dlg-log">
+  <div class="dlg wide">
+    <div class="dlg-head"><h2 id="log-t">—</h2><button type="button" class="icon-btn" data-close aria-label="Fechar"><svg class="ic"><use href="#i-x"/></svg></button></div>
+    <div class="tabs"><div class="seg" id="log-tabs" role="group"><button data-t="deploy" class="on">Deploy</button><button data-t="run">Execução</button><button data-t="hist">Histórico</button><button data-t="hook">GitHub</button></div></div>
+    <pre class="logbox" id="log-pre" tabindex="0"></pre>
+    <div class="histbox" id="log-hist" hidden></div>
+    <div class="hookbox" id="log-hook" hidden></div>
+  </div>
+</dialog>
+
+<!-- banco -->
+<dialog id="dlg-db">
+  <form class="dlg" id="db-form" autocomplete="off">
+    <div class="dlg-head"><h2>Novo banco de dados</h2><button type="button" class="icon-btn" data-close aria-label="Fechar"><svg class="ic"><use href="#i-x"/></svg></button></div>
+    <label class="field"><span>Nome</span><input name="name" required maxlength="40" placeholder="loja"></label>
+    <div class="field"><span>Motor</span>
+      <div class="seg block" id="db-engine" role="group"><button type="button" data-e="postgres" class="on">PostgreSQL</button><button type="button" data-e="mysql">MySQL</button></div>
+    </div>
+    <div class="field"><span>Quem vê e usa</span>
+      <div class="seg block" id="db-scope" role="group"><button type="button" data-s="private" class="on">Só eu</button><button type="button" data-s="shared">Nós dois</button></div>
+    </div>
+    <p class="form-error" id="db-err" role="alert"></p>
+    <div class="dlg-b"><button type="button" class="btn" data-close>Cancelar</button><button class="btn primary" id="db-ok">Criar banco</button></div>
+  </form>
+</dialog>
+
+<!-- domínio -->
+<dialog id="dlg-dom">
+  <form class="dlg" id="dom-form" autocomplete="off">
+    <div class="dlg-head"><h2>Adicionar domínio</h2><button type="button" class="icon-btn" data-close aria-label="Fechar"><svg class="ic"><use href="#i-x"/></svg></button></div>
+    <label class="field"><span>Domínio</span><input name="name" required placeholder="meusite.com.br" spellcheck="false" autocapitalize="none"></label>
+    <label class="field"><span>Token da API do Cloudflare</span><input name="token" type="password" required autocomplete="new-password"><small class="hint">No Cloudflare: Meu perfil → Tokens de API → Criar token → modelo “Editar DNS da zona”, só para este domínio. A zona precisa estar na mesma conta do túnel.</small></label>
+    <div class="field"><span>Quem pode usar</span>
+      <div class="seg block" id="dom-scope" role="group"><button type="button" data-s="private" class="on">Só eu</button><button type="button" data-s="shared">Nós dois</button></div>
+    </div>
+    <p class="form-error" id="dom-err" role="alert"></p>
+    <div class="dlg-b"><button type="button" class="btn" data-close>Cancelar</button><button class="btn primary" id="dom-ok">Adicionar</button></div>
+  </form>
+</dialog>
+
+<dialog id="dlg-confirm">
+  <form method="dialog" class="dlg">
+    <h2 id="dlg-confirm-t"></h2>
+    <p class="muted" id="dlg-confirm-p"></p>
+    <div class="dlg-b"><button class="btn" value="cancel">Cancelar</button><button class="btn danger" value="ok" id="dlg-confirm-ok"></button></div>
+  </form>
+</dialog>
+
+<script src="/app.js"></script>
+</body>
+</html>

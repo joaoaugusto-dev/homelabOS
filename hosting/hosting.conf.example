@@ -1,0 +1,20 @@
+# hosting: copie para hosting.conf e ajuste.
+port=8430
+# 127.0.0.1 = só este computador. Para a rede local ponha o IP da máquina.
+bind=127.0.0.1
+web=web
+data=data
+# Portas dos painéis homelabOS que dizem quem é o dono do cookie de login
+dash_ports=8080
+# Nome do administrador: tem de ser o admin= do homelab.conf (o token da API age como ele)
+admin=admin
+# Quem mais pode rodar comandos de build/início direto no servidor (separados por vírgula).
+# Vazio = só o administrador; os demais usam apenas containers (Dockerfile).
+#native_users=
+# Domínio já logado no cloudflared (cert.pem); só do administrador
+#cert_domain=exemplo.com
+tunnel=hosting
+# Sandbox (Landlock) para apps nativos e builds. 0 desliga.
+sandbox=1
+# 1 se o painel fica atrás de um proxy reverso seu (ex.: Caddy com TLS) que manda X-Forwarded-*
+#behind_proxy=0

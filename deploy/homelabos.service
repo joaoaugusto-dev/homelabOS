@@ -1,0 +1,22 @@
+[Unit]
+Description=homelabOS dashboard
+After=network-online.target
+
+[Service]
+User=@USER@
+WorkingDirectory=/var/lib/homelabos/os
+ExecStartPre=+/bin/sh -c 'chmod a+r /sys/class/powercap/intel-rapl:*/energy_uj 2>/dev/null || true'
+ExecStart=/opt/homelabos/homelabos/homelabos -c /etc/homelabos/homelab.conf
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+Restart=always
+RestartSec=2
+UMask=0077
+PrivateTmp=yes
+ProtectSystem=full
+ProtectKernelModules=yes
+LockPersonality=yes
+RestrictRealtime=yes
+# sem NoNewPrivileges: o painel usa "sudo -n systemctl poweroff|reboot" (regra fixa em /etc/sudoers.d/homelabos)
+
+[Install]
+WantedBy=multi-user.target

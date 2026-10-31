@@ -1,0 +1,8 @@
+# binários, estado em tempo de execução e configurações reais: nada disso entra no repositório
+/homelabos/homelabos
+/hosting/hosting
+homelab.conf
+hosting.conf
+/data/
+*.bak*
+.t.*/

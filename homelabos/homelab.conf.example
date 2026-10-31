@@ -1,0 +1,18 @@
+# homelabOS: copie para homelab.conf (0600) e ajuste.
+port=8080
+# Endereço onde o painel escuta. 127.0.0.1 = só este computador (padrão seguro).
+# Para a rede local ponha o IP da máquina (ou 0.0.0.0); só faça isso com password_hash definido.
+bind=127.0.0.1
+# Nomes das contas. O gestor é opcional: vê só o painel do servidor (sem arquivos, sem desligar).
+admin=admin
+#manager=gestor
+# Senha do administrador: ./homelabos --hash   (cole a linha aqui). Senha do gestor: ./homelabos -c homelab.conf --manager-password
+#password_hash=pbkdf2$600000$...
+# Pasta do gerenciador de arquivos
+root=/srv/compartilhado
+web=web
+data=data
+# Potência: RAPL mede só o processador; offset_w soma o resto. Calibre com um medidor de tomada.
+idle_w=6
+max_w=25
+offset_w=5

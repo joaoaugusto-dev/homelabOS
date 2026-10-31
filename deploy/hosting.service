@@ -1,0 +1,24 @@
+[Unit]
+Description=homelabOS Hospedagem (apps do GitHub/zip, bancos, Cloudflare Tunnel)
+After=network-online.target postgresql.service mariadb.service
+Wants=network-online.target
+
+[Service]
+User=@USER@
+WorkingDirectory=/var/lib/homelabos/hosting
+# podman rootless precisa do diretório de runtime do usuário (existe por causa do linger)
+Environment=XDG_RUNTIME_DIR=/run/user/@UID@
+ExecStart=/opt/homelabos/hosting/hosting -c /etc/homelabos/hosting.conf
+Restart=always
+RestartSec=2
+# o hosting derruba os apps e o túnel sozinho ao receber SIGTERM
+KillMode=mixed
+TimeoutStopSec=20
+UMask=0077
+ProtectKernelModules=yes
+LockPersonality=yes
+RestrictRealtime=yes
+# sem NoNewPrivileges: o podman rootless precisa de newuidmap (setuid)
+
+[Install]
+WantedBy=multi-user.target

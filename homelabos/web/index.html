@@ -1,0 +1,300 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#000000">
+<title>homelabOS</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%23000'/%3E%3Cpath d='M9 22V10m0 6h14m0-6v12' stroke='%23fff' stroke-width='3' fill='none' stroke-linecap='round'/%3E%3C/svg%3E">
+<link rel="preload" href="/fonts/geist.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <defs>
+    <symbol id="i-home" viewBox="0 0 24 24"><path d="M3 11.5 12 4l9 7.5M5.5 10v9.5h13V10" /></symbol>
+    <symbol id="i-bolt" viewBox="0 0 24 24"><path d="M13 3 5 13.5h6L10 21l8-10.5h-6z" /></symbol>
+    <symbol id="i-chip" viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="2"/><path d="M9 2v4M15 2v4M9 18v4M15 18v4M2 9h4M2 15h4M18 9h4M18 15h4"/></symbol>
+    <symbol id="i-folder" viewBox="0 0 24 24"><path d="M3 7.5A1.5 1.5 0 0 1 4.5 6H9l2 2.5h8.5A1.5 1.5 0 0 1 21 10v8.5a1.5 1.5 0 0 1-1.5 1.5h-15A1.5 1.5 0 0 1 3 18.5z"/></symbol>
+    <symbol id="i-grid" viewBox="0 0 24 24"><rect x="4" y="4" width="7" height="7" rx="1.5"/><rect x="13" y="4" width="7" height="7" rx="1.5"/><rect x="4" y="13" width="7" height="7" rx="1.5"/><rect x="13" y="13" width="7" height="7" rx="1.5"/></symbol>
+    <symbol id="i-file" viewBox="0 0 24 24"><path d="M6.5 3h7L19 8.5V20a1 1 0 0 1-1 1H6.5a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1zM13.5 3v5.5H19"/></symbol>
+    <symbol id="i-down" viewBox="0 0 24 24"><path d="M12 4v11m0 0-4.5-4.5M12 15l4.5-4.5M5 20h14"/></symbol>
+    <symbol id="i-up" viewBox="0 0 24 24"><path d="M12 20V9m0 0-4.5 4.5M12 9l4.5 4.5M5 4h14"/></symbol>
+    <symbol id="i-edit" viewBox="0 0 24 24"><path d="M4 20h4L19 9l-4-4L4 16zM13.5 6.5l4 4"/></symbol>
+    <symbol id="i-trash" viewBox="0 0 24 24"><path d="M5 7h14M10 7V4.5h4V7M7 7l1 13h8l1-13M10.5 11v5.5M13.5 11v5.5"/></symbol>
+    <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+    <symbol id="i-out" viewBox="0 0 24 24"><path d="M14 4h5v16h-5M10 8l-4 4 4 4M6 12h9"/></symbol>
+    <symbol id="i-ext" viewBox="0 0 24 24"><path d="M14 4h6v6M20 4l-9 9M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5"/></symbol>
+    <symbol id="i-x" viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18"/></symbol>
+    <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="6.5"/><path d="m16 16 4 4"/></symbol>
+    <symbol id="i-newfolder" viewBox="0 0 24 24"><path d="M3 7.5A1.5 1.5 0 0 1 4.5 6H9l2 2.5h8.5A1.5 1.5 0 0 1 21 10v8.5a1.5 1.5 0 0 1-1.5 1.5h-15A1.5 1.5 0 0 1 3 18.5zM12 11.5v5M9.5 14h5"/></symbol>
+  </defs>
+</svg>
+
+<!-- login -->
+<div class="login" id="login" hidden>
+  <form class="login-card" id="login-form" autocomplete="on">
+    <div class="mark" aria-hidden="true"><svg viewBox="0 0 32 32"><path d="M9 22V10m0 6h14m0-6v12"/></svg></div>
+    <h1 id="login-h">homelabOS</h1>
+    <p class="muted" id="login-p">Entre com seu usuário e senha.</p>
+    <label class="field">
+      <span>Usuário</span>
+      <input id="login-user" autocomplete="username" autocapitalize="none" autocorrect="off" spellcheck="false" required autofocus>
+    </label>
+    <label class="field">
+      <span id="login-pwl">Senha</span>
+      <input type="password" id="login-pw" autocomplete="current-password" required>
+    </label>
+    <p class="form-error" id="login-err" role="alert"></p>
+    <button class="btn primary block" id="login-btn" type="submit">Entrar</button>
+  </form>
+</div>
+
+<div class="app" id="app" hidden>
+  <aside class="side">
+    <div class="brand">
+      <div class="mark" aria-hidden="true"><svg viewBox="0 0 32 32"><path d="M9 22V10m0 6h14m0-6v12"/></svg></div>
+      <span>homelabOS</span>
+    </div>
+    <nav class="nav" id="nav" aria-label="Seções">
+      <a href="#geral" data-v="geral"><svg class="ic"><use href="#i-home"/></svg><span>Visão geral</span></a>
+      <a href="#energia" data-v="energia"><svg class="ic"><use href="#i-bolt"/></svg><span>Energia</span></a>
+      <a href="#sistema" data-v="sistema"><svg class="ic"><use href="#i-chip"/></svg><span>Sistema</span></a>
+      <a href="#arquivos" data-v="arquivos" data-admin><svg class="ic"><use href="#i-folder"/></svg><span>Arquivos</span></a>
+      <a href="#atalhos" data-v="atalhos"><svg class="ic"><use href="#i-grid"/></svg><span>Atalhos</span></a>
+    </nav>
+    <div class="side-foot">
+      <div class="host">
+        <div class="host-row"><span class="dot" id="side-dot"></span><b id="side-host">servidor</b></div>
+        <div class="muted small" id="side-os">—</div>
+        <div class="muted small" id="side-up">—</div>
+        <div class="side-user small" id="side-user"></div>
+      </div>
+      <button class="icon-btn" id="logout" title="Sair" aria-label="Sair"><svg class="ic"><use href="#i-out"/></svg></button>
+    </div>
+  </aside>
+
+  <main class="main">
+    <header class="top">
+      <h1 id="title">Visão geral</h1>
+      <div class="top-r">
+        <span class="pill" id="bat" hidden title="Bateria"><svg class="bat-ic" viewBox="0 0 26 14" aria-hidden="true"><rect class="bo" x=".75" y=".75" width="21.5" height="12.5" rx="3.25"/><rect class="bn" x="23.5" y="4.5" width="2" height="5" rx="1"/><rect class="bf" id="bat-f" x="2.5" y="2.5" width="18" height="9" rx="1.8"/></svg><span id="bat-t">—</span><span id="bat-s" class="bat-s"></span></span>
+                <span class="pill" id="live"><span class="dot"></span><span id="live-t">Conectando</span></span>
+        <span class="clock" id="clock">--:--</span>
+      </div>
+    </header>
+
+    <!-- visão geral -->
+    <section class="view" id="v-geral" hidden>
+      <div class="grid">
+        <article class="card hero reveal">
+          <div class="card-h">
+            <span>Consumo agora</span>
+            <span class="tag" id="pw-src" title="">—</span>
+          </div>
+          <div class="hero-n">
+            <span class="big" id="pw-now">0</span><span class="unit">W</span>
+          </div>
+          <div class="muted" id="pw-sub">—</div>
+          <div class="chart-wrap"><canvas id="c-power" aria-label="Gráfico do consumo em watts"></canvas></div>
+          <div class="seg" data-range-for="power" role="group" aria-label="Período do gráfico">
+            <button data-r="60">1 min</button><button data-r="300" class="on">5 min</button><button data-r="600">10 min</button>
+          </div>
+        </article>
+
+        <article class="card cost reveal">
+          <div class="card-h"><span>Custo de energia</span></div>
+          <dl class="cost-list">
+            <div><dt>Hoje</dt><dd><b data-cost="today">—</b><small data-kwh="today"></small></dd></div>
+            <div><dt>Este mês</dt><dd><b data-cost="month">—</b><small data-kwh="month"></small></dd></div>
+            <div><dt>Projeção do mês</dt><dd><b data-cost="proj">—</b><small data-kwh="proj"></small></dd></div>
+            <div><dt data-since>Total</dt><dd><b data-cost="total">—</b><small data-kwh="total"></small></dd></div>
+          </dl>
+          <label class="price">
+            <span>Valor do kWh</span>
+            <span class="price-in"><i>R$</i><input inputmode="decimal" data-price aria-label="Valor do kWh em reais" value="0,95"></span>
+          </label>
+        </article>
+
+        <article class="card stat reveal">
+          <div class="card-h"><span>Processador</span><span class="muted small" id="cpu-mhz"></span></div>
+          <div class="stat-n"><span class="num" id="cpu-now">0</span><span class="unit">%</span></div>
+          <canvas class="spark" id="s-cpu"></canvas>
+        </article>
+        <article class="card stat reveal">
+          <div class="card-h"><span>Temperatura</span><span class="tag hot" id="temp-flag" hidden>Quente</span></div>
+          <div class="stat-n"><span class="num" id="temp-now">0</span><span class="unit">°C</span></div>
+          <canvas class="spark" id="s-temp"></canvas>
+        </article>
+        <article class="card stat reveal">
+          <div class="card-h"><span>Memória</span><span class="muted small" id="mem-sub"></span></div>
+          <div class="stat-n"><span class="num" id="mem-now">0</span><span class="unit">%</span></div>
+          <div class="bar"><i id="mem-bar"></i></div>
+          <div class="muted small" id="mem-detail">—</div>
+        </article>
+        <article class="card stat reveal">
+          <div class="card-h"><span>Rede</span></div>
+          <div class="net-n">
+            <div><svg class="ic s"><use href="#i-down"/></svg><span class="num" id="rx-now">0</span><span class="unit" id="rx-u">KB/s</span></div>
+            <div><svg class="ic s"><use href="#i-up"/></svg><span class="num" id="tx-now">0</span><span class="unit" id="tx-u">KB/s</span></div>
+          </div>
+          <canvas class="spark" id="s-net"></canvas>
+        </article>
+
+        <article class="card disks reveal">
+          <div class="card-h"><span>Armazenamento</span></div>
+          <div class="disk-list" data-disks></div>
+        </article>
+        <article class="card sys reveal">
+          <div class="card-h"><span>Servidor</span></div>
+          <dl class="kv" id="kv-sys"></dl>
+        </article>
+
+        <article class="card apps-strip reveal" id="apps-strip-card">
+          <div class="card-h"><span>Atalhos</span><a class="link" href="#atalhos">Gerenciar</a></div>
+          <div class="app-row" data-apps-strip></div>
+        </article>
+      </div>
+    </section>
+
+    <!-- energia -->
+    <section class="view" id="v-energia" hidden>
+      <div class="grid">
+        <article class="card big3 reveal">
+          <div><span class="muted">Hoje</span><b data-cost="today">—</b><small data-kwh="today"></small></div>
+          <div><span class="muted">Este mês</span><b data-cost="month">—</b><small data-kwh="month"></small></div>
+          <div><span class="muted">Projeção do mês</span><b data-cost="proj">—</b><small data-kwh="proj"></small></div>
+          <div><span class="muted" data-since>Total</span><b data-cost="total">—</b><small data-kwh="total"></small></div>
+        </article>
+        <article class="card wide reveal">
+          <div class="card-h"><span>Consumo em watts</span>
+            <div class="seg" data-range-for="power2" role="group" aria-label="Período do gráfico">
+              <button data-r="60">1 min</button><button data-r="300" class="on">5 min</button><button data-r="600">10 min</button>
+            </div>
+          </div>
+          <div class="chart-wrap tall"><canvas id="c-power2"></canvas></div>
+        </article>
+        <article class="card side-card reveal">
+          <div class="card-h"><span>Tarifa</span></div>
+          <label class="price col">
+            <span>Valor do kWh</span>
+            <span class="price-in"><i>R$</i><input inputmode="decimal" data-price aria-label="Valor do kWh em reais" value="0,95"></span>
+          </label>
+          <p class="muted small" id="pw-note">—</p>
+        </article>
+        <article class="card full reveal">
+          <div class="card-h"><span>Últimos 31 dias</span><span class="muted small" id="days-note"></span></div>
+          <div class="days" id="days"></div>
+        </article>
+      </div>
+    </section>
+
+    <!-- sistema -->
+    <section class="view" id="v-sistema" hidden>
+      <div class="grid">
+        <article class="card wide reveal">
+          <div class="card-h"><span>Processador</span><span class="muted small" id="cpu-info"></span></div>
+          <div class="chart-wrap"><canvas id="c-cpu"></canvas></div>
+          <div class="cores" id="cores"></div>
+        </article>
+        <article class="card side-card reveal">
+          <div class="card-h"><span>Temperatura</span></div>
+          <div class="stat-n"><span class="num" id="temp2">0</span><span class="unit">°C</span></div>
+          <div class="muted small" id="dtemp">—</div>
+          <canvas class="spark tall" id="s-temp2"></canvas>
+        </article>
+        <article class="card wide reveal">
+          <div class="card-h"><span>Rede</span>
+            <span class="legend"><i class="l1"></i>Recebido <i class="l2"></i>Enviado</span>
+          </div>
+          <div class="chart-wrap"><canvas id="c-net"></canvas></div>
+          <div class="net-tot muted small" id="net-tot">—</div>
+        </article>
+        <article class="card side-card reveal">
+          <div class="card-h"><span>Memória</span></div>
+          <div class="stat-n"><span class="num" id="mem2">0</span><span class="unit">%</span></div>
+          <div class="bar"><i id="mem2-bar"></i></div>
+          <dl class="kv" id="kv-mem"></dl>
+        </article>
+        <article class="card full reveal" data-admin>
+          <div class="card-h"><span>Controles do servidor</span></div>
+          <div class="power-row">
+            <button class="btn" id="pw-reboot">Reiniciar</button>
+            <button class="btn danger" id="pw-off">Desligar</button>
+            <span class="muted small">Desligado, só volta apertando o botão de ligar na máquina.</span>
+          </div>
+        </article>
+        <article class="card full reveal">
+          <div class="card-h"><span>Discos</span></div>
+          <div class="disk-list big" data-disks></div>
+        </article>
+      </div>
+    </section>
+
+    <!-- arquivos -->
+    <section class="view" id="v-arquivos" hidden>
+      <article class="card files reveal" id="drop">
+        <div class="files-top">
+          <nav class="crumbs" id="crumbs" aria-label="Caminho"></nav>
+          <div class="files-tools">
+            <label class="search"><svg class="ic s"><use href="#i-search"/></svg><input id="f-filter" placeholder="Filtrar nesta pasta" aria-label="Filtrar nesta pasta"></label>
+            <button class="btn" id="f-mkdir"><svg class="ic s"><use href="#i-newfolder"/></svg>Nova pasta</button>
+            <button class="btn primary" id="f-upload"><svg class="ic s"><use href="#i-up"/></svg>Enviar arquivos</button>
+            <input type="file" id="f-input" multiple hidden>
+          </div>
+        </div>
+        <div class="f-head"><span>Nome</span><span class="r">Tamanho</span><span class="r hide-s">Modificado</span><span></span></div>
+        <div class="f-list" id="f-list" role="list"></div>
+        <div class="drop-hint" aria-hidden="true"><svg class="ic"><use href="#i-up"/></svg><b>Solte para enviar</b><span id="drop-to"></span></div>
+      </article>
+    </section>
+
+    <!-- atalhos -->
+    <section class="view" id="v-atalhos" hidden>
+      <div class="apps" id="apps"></div>
+    </section>
+  </main>
+</div>
+
+<div class="wake" id="wake" hidden role="dialog" aria-modal="true" aria-labelledby="wake-t">
+  <div class="wake-in">
+    <div class="leader" aria-hidden="true">
+      <i class="sweep"></i>
+      <svg viewBox="0 0 200 200"><circle cx="100" cy="100" r="94"/><circle cx="100" cy="100" r="72"/><path d="M6 100h188M100 6v188"/></svg>
+      <span class="digit" id="wake-n">3</span>
+    </div>
+    <h2 id="wake-t">Abrindo</h2>
+    <p class="muted" id="wake-s">Ligando o app</p>
+    <div class="wake-b" id="wake-b" hidden><button class="btn primary" id="wake-retry">Tentar de novo</button><button class="btn" id="wake-x">Fechar</button></div>
+  </div>
+</div>
+<div class="uploads" id="uploads" hidden></div>
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+<dialog id="dlg-input">
+  <form method="dialog" class="dlg">
+    <h2 id="dlg-input-t"></h2>
+    <label class="field"><span id="dlg-input-l"></span><input id="dlg-input-v" autocomplete="off" required></label>
+    <label class="field" id="dlg-input-2w" hidden><span id="dlg-input-l2"></span><input id="dlg-input-v2" autocomplete="off"></label>
+    <label class="check" id="dlg-input-3w" hidden><input type="checkbox" id="dlg-input-c"><span><b id="dlg-input-l3"></b><small id="dlg-input-h3"></small></span></label>
+    <p class="form-error" id="dlg-input-e" role="alert"></p>
+    <div class="dlg-b"><button class="btn" value="cancel" formnovalidate>Cancelar</button><button class="btn primary" value="ok" id="dlg-input-ok"></button></div>
+  </form>
+</dialog>
+<dialog id="dlg-confirm">
+  <form method="dialog" class="dlg">
+    <h2 id="dlg-confirm-t"></h2>
+    <p class="muted" id="dlg-confirm-p"></p>
+    <div class="dlg-b"><button class="btn" value="cancel">Cancelar</button><button class="btn danger" value="ok" id="dlg-confirm-ok"></button></div>
+  </form>
+</dialog>
+<dialog id="dlg-view" class="viewer">
+  <button class="icon-btn close" id="viewer-x" aria-label="Fechar"><svg class="ic"><use href="#i-x"/></svg></button>
+  <div class="viewer-body" id="viewer-body"></div>
+  <div class="viewer-cap" id="viewer-cap"></div>
+</dialog>
+
+<script src="/app.js"></script>
+</body>
+</html>
