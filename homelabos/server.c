@@ -731,6 +731,29 @@ static void jstr(const char *body, const char *key, char *out, size_t cap) {
     for (p++; *p && *p != '"' && n + 1 < cap; p++) { if (*p == '\\' && p[1]) p++; out[n++] = *p; }
     out[n] = 0;
 }
+/* Primeiro acesso do gestor: só existe se o administrador armar um convite no terminal do servidor (--invite-manager). O convite tem
+   um código de uso único e validade; sem ele ninguém na rede consegue definir a senha de uma conta alheia. Armar também aposenta a
+   senha antiga (data/<gestor>.pw vira .pw.old), então "esqueci a senha" e "primeiro acesso" são o mesmo caminho. */
+static int inv_fails; // erros de código desde que o servidor subiu: com 10, o convite é queimado
+static void inv_path(char *o, size_t c) { snprintf(o, c, "%s/%s.invite", cfg.data, cfg.manager); }
+static int inv_load(char *code) { // 1 se há convite válido; o código volta em code[16]
+    char p[PATH_MAX], l[64]; long long exp = 0; inv_path(p, sizeof p);
+    FILE *f = fopen(p, "r"); if (!f) return 0;
+    char *r = fgets(l, sizeof l, f); fclose(f);
+    return r && sscanf(l, "%15s %lld", code, &exp) == 2 && exp > (long long)time(NULL);
+}
+static int inv_arm(int hours, char *code) { // 0 ok
+    static const char A[] = "ABCDEFGHJKMNPQRSTUVWXYZ23456789"; // sem 0/O/1/I/L
+    uint8_t r[8]; char p[PATH_MAX], pw[PATH_MAX], old[PATH_MAX + 8], l[64];
+    rand_bytes(r, 8); for (int i = 0; i < 8; i++) code[i] = A[r[i] % (sizeof A - 1)]; code[8] = 0;
+    inv_path(p, sizeof p); hq_path(pw, sizeof pw); snprintf(old, sizeof old, "%s.old", pw);
+    if (!access(pw, F_OK)) rename(pw, old);
+    int fd = open(p, O_WRONLY | O_CREAT | O_TRUNC, 0600);
+    if (fd < 0) return -1;
+    int n = snprintf(l, sizeof l, "%s %lld\n", code, (long long)time(NULL) + (long long)hours * 3600);
+    int rc = write(fd, l, n) == n ? 0 : -1; close(fd);
+    return rc;
+}
 static int user_idx(const char *name) {
     if (!strcasecmp(name, cfg.admin)) return 0;
     if (cfg.manager[0] && !strcasecmp(name, cfg.manager)) return 1;
@@ -958,7 +981,11 @@ static void route(int c, Req *rq) {
         jstr(body, "user", name, sizeof name); jstr(body, "password", pw, sizeof pw);
         if (rl_block(c, rq)) return;
         int u = auth_on() ? user_idx(name) : 0;
-        if (u == 1 && !hq_load(salt, want)) u = -1; // gestor sem senha definida: tratado como usuário inexistente
+        if (u == 1 && !hq_load(salt, want)) { // gestor sem senha: só há "primeiro acesso" se o administrador armou um convite
+            char ic[16];
+            if (inv_load(ic)) { const char *m = "{\"error\":\"Primeiro acesso: defina sua senha.\",\"setup\":1}"; reply(c, 409, "application/json", m, strlen(m), NULL); return; }
+            u = -1;
+        }
         if (u == 0) { snprintf(salt, sizeof salt, "%s", cfg.salt); snprintf(want, sizeof want, "%s", cfg.hash); }
         int good = u >= 0 && want[0] && pw_ok(pw, salt, want);
         if (u < 0) pw_ok(pw, "", "pbkdf2$600000$00000000000000000000000000000000$0000000000000000000000000000000000000000000000000000000000000000"); // mesmo custo com usuário inválido, para o tempo não revelar quem existe
@@ -968,6 +995,26 @@ static void route(int c, Req *rq) {
             cookie_hdr(ex, sizeof ex, rq, tok);
             reply(c, 200, "application/json", "{\"ok\":1}", 8, ex);
         } else { rl_fail(rq->ip); sleep(1); jerr(c, 401, "Usuário ou senha incorretos."); }
+        return;
+    }
+    if (!strcmp(p, "/api/setup") && post) {
+        char body[768], name[48], pw[256], code[32], ic[16], tok[33], ex[200];
+        if (read_body(c, rq, body, sizeof body)) { jerr(c, 400, "pedido inválido"); return; }
+        jstr(body, "user", name, sizeof name); jstr(body, "password", pw, sizeof pw); jstr(body, "code", code, sizeof code);
+        if (rl_block(c, rq)) return;
+        if (user_idx(name) != 1 || !inv_load(ic)) { rl_fail(rq->ip); jerr(c, 403, "Não há convite aberto para esta conta. Peça ao administrador."); return; }
+        for (char *q = code; *q; q++) *q = toupper((unsigned char)*q);
+        if (!ct_eq(code, ic)) {
+            rl_fail(rq->ip);
+            if (++inv_fails >= 10) { char ip[PATH_MAX]; inv_path(ip, sizeof ip); unlink(ip); }
+            sleep(1); jerr(c, 403, "Código de convite incorreto."); return;
+        }
+        if (strlen(pw) < 8) { jerr(c, 400, "A senha precisa ter pelo menos 8 caracteres."); return; }
+        if (hq_create(pw)) { jerr(c, 500, "não foi possível gravar a senha"); return; }
+        { char ip[PATH_MAX]; inv_path(ip, sizeof ip); unlink(ip); } // uso único
+        session_new(tok, 1); rl_clear(rq->ip);
+        cookie_hdr(ex, sizeof ex, rq, tok);
+        reply(c, 200, "application/json", "{\"ok\":1}", 8, ex);
         return;
     }
     if (!strcmp(p, "/api/logout")) {
@@ -1114,6 +1161,15 @@ int main(int argc, char **argv) {
         return 0;
     }
     cfg_load(argc > 2 && !strcmp(argv[1], "-c") ? argv[2] : "homelab.conf");
+    if (argc > 3 && !strcmp(argv[3], "--invite-manager")) { // homelabos -c homelab.conf --invite-manager [horas]
+        char code[16]; int hrs = argc > 4 ? atoi(argv[4]) : 72;
+        if (!cfg.manager[0]) { fprintf(stderr, "Defina manager=<nome> no homelab.conf antes.\n"); return 1; }
+        mkdir(cfg.data, 0700);
+        if (inv_arm(hrs, code)) { perror("gravar o convite"); return 1; }
+        fprintf(stderr, "Convite aberto para \"%s\" por %d h. A senha antiga dele deixou de valer.\n", cfg.manager, hrs);
+        printf("%s\n", code);
+        return 0;
+    }
     if (argc > 3 && !strcmp(argv[3], "--manager-password")) {
         char pw[256], pw2[256];
         if (!cfg.manager[0]) { fprintf(stderr, "Defina manager=<nome> no homelab.conf antes.\n"); return 1; }

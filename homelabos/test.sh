@@ -79,8 +79,18 @@ check "página inicial traz CSP e não permite iframe" 'curl -s -D - -o /dev/nul
 # gestor
 check "gestor com senha entra" '[ "$(login beto senha-do-beto)" = 200 ] && get beto /api/me | grep -q "\"role\":\"gestor\""'
 check "gestor não vê arquivos nem desliga" '[ "$(code beto "/api/fs/list?path=/")" = 403 ] && [ "$(code beto /api/power/poweroff -X POST "${H[@]}")" = 403 ]'
-check "/api/setup não existe mais: ninguém define senha de conta alheia" 'rm -f "$T/data/beto.pw"; R=$(curl -s -o /dev/null -w "%{http_code}" "${H[@]}" --data "{\"user\":\"beto\",\"password\":\"tomei-a-conta\"}" $BASE/api/setup); [ "$R" = 401 ] && [ ! -e "$T/data/beto.pw" ]'
-check "gestor sem senha definida: login falha igual a usuário inexistente (sem pista de 'primeiro acesso')" '[ "$(login beto qualquer-coisa)" = 401 ] && ! curl -s "${H[@]}" --data "{\"user\":\"beto\",\"password\":\"x\"}" $BASE/api/login | grep -qi "primeiro"'
+SETUP() { curl -s -o /dev/null -w "%{http_code}" "${H[@]}" --data "{\"user\":\"beto\",\"password\":\"$1\",\"code\":\"$2\"}" $BASE/api/setup; }
+check "sem convite armado, ninguém define a senha do gestor (nem 'primeiro acesso' na tela de login)" 'rm -f "$T/data/beto.pw"; R=$(SETUP tomei-a-conta QUALQUER); [ "$R" = 403 ] && [ ! -e "$T/data/beto.pw" ] && [ "$(login beto qualquer-coisa)" = 401 ] && ! curl -s "${H[@]}" --data "{\"user\":\"beto\",\"password\":\"x\"}" $BASE/api/login | grep -qi primeiro'
+printf 'senha-velha-do-beto\n' | "$T/homelabos" -c "$T/homelab.conf" --manager-password 2>/dev/null
+check "armar o convite imprime um código de 8 caracteres e aposenta a senha antiga" 'CODE=$("$T/homelabos" -c "$T/homelab.conf" --invite-manager 2>/dev/null); [ ${#CODE} = 8 ] && [ ! -e "$T/data/beto.pw" ] && [ -e "$T/data/beto.pw.old" ] && [ "$(stat -c %a "$T/data/beto.invite")" = 600 ] && [ "$(login beto senha-velha-do-beto)" = 409 ]'
+check "com convite, o login do gestor pede 'primeiro acesso' (setup)" 'curl -s "${H[@]}" --data "{\"user\":\"beto\",\"password\":\"x\"}" $BASE/api/login | grep -q "\"setup\":1"'
+check "código errado => 403 e nada é gravado" '[ "$(SETUP senha-nova-do-beto ZZZZZZZZ)" = 403 ] && [ ! -e "$T/data/beto.pw" ]'
+check "código certo mas senha curta => 400" '[ "$(SETUP curta "$CODE")" = 400 ] && [ ! -e "$T/data/beto.pw" ]'
+check "código certo (aceita minúsculas) define a senha, entra e o convite é queimado" 'R=$(SETUP senha-nova-do-beto "$(echo $CODE | tr A-Z a-z)"); [ "$R" = 200 ] && [ ! -e "$T/data/beto.invite" ] && [ "$(login beto senha-nova-do-beto)" = 200 ] && [ "$(SETUP outra-senha-xx "$CODE")" = 403 ] && [ "$(login beto outra-senha-xx)" = 401 ]'
+check "convite com validade 0 h já nasce expirado" 'C2=$("$T/homelabos" -c "$T/homelab.conf" --invite-manager 0 2>/dev/null); [ "$(SETUP senha-qualquer-1 "$C2")" = 403 ] && [ ! -e "$T/data/beto.pw" ]'
+check "10 códigos errados (de IPs diferentes) queimam o convite; com 4 ele ainda existe" '"$T/homelabos" -c "$T/homelab.conf" --invite-manager >/dev/null 2>&1; for i in 1 2 3 4; do curl -s -o /dev/null -H "Cf-Connecting-Ip: 10.0.0.$i" "${H[@]}" --data "{\"user\":\"beto\",\"password\":\"x-senha-longa\",\"code\":\"ERRADO\"}" $BASE/api/setup; done; [ -e "$T/data/beto.invite" ] && for i in 5 6 7 8 9 10 11; do curl -s -o /dev/null -H "Cf-Connecting-Ip: 10.0.0.$i" "${H[@]}" --data "{\"user\":\"beto\",\"password\":\"x-senha-longa\",\"code\":\"ERRADO\"}" $BASE/api/setup; done; [ ! -e "$T/data/beto.invite" ]'
+check "o administrador não é afetado pelo convite do gestor (IP diferente: o limitador é por IP)" '[ "$(curl -s -o /dev/null -w %{http_code} -H "Cf-Connecting-Ip: 9.9.9.9" "${H[@]}" --data "{\"user\":\"ana\",\"password\":\"senha-do-admin\"}" $BASE/api/login)" = 200 ]'
+rm -f "$T/data/beto.invite"; mv "$T/data/beto.pw.old" "$T/data/beto.pw" 2>/dev/null; printf 'senha-do-beto\n' | "$T/homelabos" -c "$T/homelab.conf" --manager-password 2>/dev/null
 
 # formato antigo (30000 rodadas de sha256) continua valendo até a senha ser trocada
 OLD=$(python3 - <<'PY'

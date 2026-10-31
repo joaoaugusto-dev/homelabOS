@@ -19,6 +19,7 @@ Untrusted: anyone on the network, anyone on the internet reaching a published ap
 | Login | PBKDF2-HMAC-SHA256 600k iterations; constant-time comparison; same cost for unknown users; 5 failures lock an IP for 15 min; 7-day random 128-bit sessions; cookie `HttpOnly; SameSite=Strict` (+`Secure` behind HTTPS) |
 | CSRF | All state-changing requests need `X-Requested-With`. Cookies do not isolate ports, so a page served on another port of the same host counts as "same site"; the header requires a CORS preflight that is never granted |
 | Session theft by apps | The Hosting proxy removes the panel cookie (`hl`) before forwarding requests to apps |
+| First access | The manager sets their own password only after the admin arms an invite (`--invite-manager`) with a single-use code; 10 wrong codes burn it |
 | Startup | No password → refuses to listen on anything but loopback; weak/old hash formats are reported |
 | Slow clients | 10 s total budget for request headers, bounded body reads, connection caps |
 | File manager | Paths resolved with `realpath` and kept inside the shared root (symlinks pointing out are refused); uploads cannot contain `/` in names; user files are served as inert text (`CSP: sandbox`) |

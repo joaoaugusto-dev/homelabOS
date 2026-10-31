@@ -371,20 +371,36 @@ async function loadHistory() {
 }
 
 /* ---------- login ---------- */
-let booted = false, ME = { user: "", role: "" };
+let booted = false, ME = { user: "", role: "" }, setupMode = false;
+function loginMode(setup) { // "primeiro acesso": só aparece quando o administrador abriu um convite para esta conta
+  setupMode = setup;
+  $("#login-h").textContent = setup ? "Defina sua senha" : "homelabOS";
+  $("#login-p").textContent = setup ? `Primeiro acesso de ${$("#login-user").value.trim().toLowerCase()}. Digite o código de convite que o administrador te passou e escolha uma senha com pelo menos 8 caracteres.` : "Entre com seu usuário e senha.";
+  $("#login-pwl").textContent = setup ? "Nova senha" : "Senha";
+  $("#login-pw").autocomplete = setup ? "new-password" : "current-password";
+  $("#login-pw2w").hidden = $("#login-codew").hidden = !setup; $("#login-pw2").required = $("#login-code").required = setup;
+  $("#login-btn").textContent = setup ? "Definir senha e entrar" : "Entrar";
+}
 function showLogin() {
   $("#app").hidden = true; $("#login").hidden = false; document.body.removeAttribute("data-role");
-  $("#login-pw").value = "";
+  loginMode(false); $("#login-pw").value = $("#login-pw2").value = $("#login-code").value = "";
   ($("#login-user").value ? $("#login-pw") : $("#login-user")).focus();
 }
+$("#login-user").addEventListener("input", () => { if (setupMode) loginMode(false); });
 $("#login-form").addEventListener("submit", async (e) => {
   e.preventDefault();
   const err = $("#login-err"); err.textContent = "";
   const user = $("#login-user").value.trim().toLowerCase(), pw = $("#login-pw").value;
+  if (setupMode) {
+    if (pw.length < 8) { err.textContent = "A senha precisa ter pelo menos 8 caracteres."; return; }
+    if (pw !== $("#login-pw2").value) { err.textContent = "As senhas não são iguais."; $("#login-pw2").select(); return; }
+  }
   try {
-    const r = await api("/api/login", { method: "POST", body: JSON.stringify({ user, password: pw }) });
-    if (!r.ok) { err.textContent = await errMsg(r); $("#login-pw").select(); return; }
-    $("#login-pw").value = ""; boot();
+    const body = setupMode ? { user, password: pw, code: $("#login-code").value.trim() } : { user, password: pw };
+    const r = await api(setupMode ? "/api/setup" : "/api/login", { method: "POST", body: JSON.stringify(body) });
+    if (r.status === 409 && !setupMode && (await r.clone().json()).setup) { loginMode(true); $("#login-pw").value = ""; $("#login-pw").focus(); return; }
+    if (!r.ok) { err.textContent = await errMsg(r); if (!setupMode) $("#login-pw").select(); return; }
+    $("#login-pw").value = $("#login-pw2").value = $("#login-code").value = ""; boot();
   } catch { err.textContent = "Não foi possível falar com o servidor."; }
 });
 $("#logout").addEventListener("click", async () => { await api("/api/logout", { method: "POST" }); location.reload(); });

@@ -46,6 +46,14 @@
       <span id="login-pwl">Senha</span>
       <input type="password" id="login-pw" autocomplete="current-password" required>
     </label>
+    <label class="field" id="login-pw2w" hidden>
+      <span>Repita a senha</span>
+      <input type="password" id="login-pw2" autocomplete="new-password">
+    </label>
+    <label class="field" id="login-codew" hidden>
+      <span>Código de convite</span>
+      <input id="login-code" autocomplete="one-time-code" autocapitalize="characters" spellcheck="false" maxlength="12">
+    </label>
     <p class="form-error" id="login-err" role="alert"></p>
     <button class="btn primary block" id="login-btn" type="submit">Entrar</button>
   </form>

@@ -6,6 +6,8 @@ bind=127.0.0.1
 # Nomes das contas. O gestor é opcional: vê só o painel do servidor (sem arquivos, sem desligar).
 admin=admin
 #manager=gestor
+# Senha do gestor: o administrador arma um convite com código de uso único (válido por 72 h) e passa o código a ele:
+#   ./homelabos -c homelab.conf --invite-manager     (a senha antiga do gestor deixa de valer; ele define a nova na tela de login)
 # Senha do administrador: ./homelabos --hash   (cole a linha aqui). Senha do gestor: ./homelabos -c homelab.conf --manager-password
 #password_hash=pbkdf2$600000$...
 # Pasta do gerenciador de arquivos
