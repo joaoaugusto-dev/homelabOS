@@ -92,7 +92,9 @@ swap() { # swap NOVO DESTINO  (mv atômico: o processo antigo segue com o arquiv
   run install -m 755 "$1" "$2.new"; run mv -f "$2.new" "$2"; }
 swap "$B/homelabos" "$OS/homelabos"; swap "$B/hosting" "$HS/hosting"
 for p in "homelabos:$OS" "hosting:$HS"; do d=${p%%:*}; t=${p#*:}
-  run rm -rf "$t/web.new"; run cp -r "$SRC/$d/web" "$t/web.new"; run rm -rf "$t/web.old"; run mv "$t/web" "$t/web.old"; run mv "$t/web.new" "$t/web"
+  run rm -rf "$t/web.new"; run cp -r "$SRC/$d/web" "$t/web.new"
+  [ -d "$t/web/icons" ] && { run mkdir -p "$t/web.new/icons"; run cp -rn "$t/web/icons/." "$t/web.new/icons/"; }   # ícones seus (ex.: do cinema) que os atalhos referenciam por caminho
+  run rm -rf "$t/web.old"; run mv "$t/web" "$t/web.old"; run mv "$t/web.new" "$t/web"
 done
 echo "   (painéis antigos ficam em web.old; os atalhos em data/apps.json não mudam)"
 
