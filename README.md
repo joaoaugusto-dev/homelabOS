@@ -60,3 +60,8 @@ docs/        screenshots
 ## License
 
 MIT. See [`LICENSE`](LICENSE).
+
+## Upgrading an older install
+
+If you already run a previous (pre-hardening) version in `~/homelabOS` and `~/hosting`:
+`bash deploy/upgrade-existing.sh [ssh-host] [--manager NAME] [--dry-run]` ships the committed code, builds it on the server, backs everything up, fills in the new config keys, swaps binaries, restarts, checks, and rolls back by itself if a service does not come up.
