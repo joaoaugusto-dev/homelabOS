@@ -36,7 +36,7 @@ cp -a "$HS/data/domains.conf" "$HS/data/settings.conf" "$BK/hs/" 2>/dev/null || 
 echo "   ok"
 
 step "3/7 Configurações (só acrescenta o que falta; o que você já tinha fica)"
-# nomes: o homelabOS antigo tinha "joao" e "henrique" fixos no código
+# nomes: o homelabOS antigo tinha os dois nomes de conta fixos no código; agora vêm do conf
 OS_ADMIN=$ME; MANAGER=${MANAGER:-}   # MANAGER=nome (opcional): conta de gestor do homelabOS
 OS_PORT=$(sed -n 's/^port=//p' "$OS/homelab.conf"); OS_PORT=${OS_PORT:-80}
 setkey "$OS/homelab.conf" bind 0.0.0.0 keep          # como era antes: acessível pela rede local
