@@ -53,7 +53,7 @@ export PODMAN_LOG=$T/podman.log PODMAN_ENV=$T/podman.env
 cat > "$T/bin/podman" <<'EOF'
 #!/bin/sh
 echo "$@" >> "$PODMAN_LOG"
-[ "$1" = run ] && env | grep -E '^(PORT|HOST|DB_[A-Z]+|DATABASE_URL|A)=' | sort >> "$PODMAN_ENV"
+[ "$1" = run ] && env | grep -E '^(PORT|HOST|DB_[A-Z]+|BUCKET_[A-Z]+|DATABASE_URL|A)=' | sort >> "$PODMAN_ENV"
 case "$1" in
   build) echo "STEP 1/1: FROM scratch"; echo "Successfully tagged"; exit 0 ;;
   run) exec sleep 601 ;;
@@ -502,6 +502,30 @@ check "bucket: mkdir, renomear/mover (sem sobrescrever) e apagar arquivo" 'bkapi
 check "bucket: apagar pasta leva o conteúdo e o total é recalculado" 'bkapi fotos-da-casa rm --data-urlencode key=docs | grep -q ok && [ ! -e "$APP/buckets/fotos-da-casa/docs" ] && api ana GET /api/overview | python3 -c "import sys,json; b=[x for x in json.load(sys.stdin)[\"buckets\"] if x[\"id\"]==\"fotos-da-casa\"][0]; assert b[\"files\"]==2 and b[\"bytes\"]==3000+$(stat -c %s "$T/i.svg"), b"'
 check "bucket compartilhado: o beto envia e a ana enxerga" 'curl -s -m 10 -X POST -H "Cookie: hl=$H" -H "X-Requested-With: hosting" --data-urlencode "name=Comum" --data-urlencode scope=shared http://127.0.0.1:$PORT/api/bucket/create | grep -q ok && BK=$H bkup comum "nós/ação.txt" "$T/c.txt" | grep -q ok && [ "$(bkget "file?id=comum&key=$(enc "nós/ação.txt")")" = hello ] && curl -s -D- -o /dev/null -H "Cookie: hl=$J" "http://127.0.0.1:$PORT/api/bucket/file?id=comum&key=$(enc "nós/ação.txt")&dl=1" | grep -q "filename\*=UTF-8..n%C3%B3s\|filename\*=UTF-8..a%C3%A7%C3%A3o.txt"'
 check "bucket: POST sem X-Requested-With => 403" '[ "$(curl -s -o /dev/null -w %{http_code} -X POST -H "Cookie: hl=$J" --data-binary @"$T/c.txt" "http://127.0.0.1:$PORT/api/bucket/upload?id=comum&key=x")" = 403 ]'
+# ---- bucket ligado a um app: token com escopo, variáveis injetadas ----
+curl -s -m 10 -X POST -H "Cookie: hl=$J" -H "X-Requested-With: hosting" --data-urlencode "name=Tok" http://127.0.0.1:$PORT/api/bucket/create >/dev/null
+curl -s -m 10 -X POST -H "Cookie: hl=$J" -H "X-Requested-With: hosting" --data-urlencode "name=Outro" http://127.0.0.1:$PORT/api/bucket/create >/dev/null
+bktok() { api ana GET /api/overview | python3 -c "import sys,json; print([x['token'] for x in json.load(sys.stdin)['buckets'] if x['id']=='$1'][0])"; }
+TK=$(bktok tok); TO=$(bktok outro)
+tk() { curl -s -m 10 -H "Authorization: Bearer ${TKN-$TK}" -H "X-Requested-With: hosting" "$@"; }
+check "token do bucket: 32 hex, diferente por bucket, e só o dono vê" '[ ${#TK} = 32 ] && [ "$TK" != "$TO" ] && ! api beto GET /api/overview | grep -q "$TK"'
+check "token do bucket: envia, lista e lê o próprio bucket" 'tk -X POST --data-binary @"$T/c.txt" "http://127.0.0.1:$PORT/api/bucket/upload?id=tok&key=f/c.txt" | grep -q ok && tk "http://127.0.0.1:$PORT/api/bucket/list?id=tok&prefix=f" | grep -q c.txt && [ "$(tk "http://127.0.0.1:$PORT/api/bucket/file?id=tok&key=f/c.txt")" = hello ]'
+check "token do bucket: não abre outro bucket (404), nem com id trocado" '[ "$(tk -o /dev/null -w %{http_code} "http://127.0.0.1:$PORT/api/bucket/list?id=outro")" = 404 ] && [ "$(tk -o /dev/null -w %{http_code} -X POST --data-binary @"$T/c.txt" "http://127.0.0.1:$PORT/api/bucket/upload?id=outro&key=x")" = 404 ] && [ ! -e "$APP/buckets/outro/x" ]'
+check "token do bucket: não gerencia (criar, tornar público, apagar, girar token) => 403" 'ok=1; for ep in create update delete; do [ "$(tk -o /dev/null -w %{http_code} -X POST --data "id=tok&name=Novo&pub=1&rotate=1" http://127.0.0.1:$PORT/api/bucket/$ep)" = 403 ] || ok=0; done; [ $ok = 1 ] && [ "$(bktok tok)" = "$TK" ]'
+check "token do bucket: não alcança bancos, apps, deploys nem overview (401/403)" 'ok=1; for u in /api/overview /api/deploys "/api/db/view?id=h_x&what=tables" /api/me "/api/app/log?id=x"; do c=$(tk -o /dev/null -w %{http_code} "http://127.0.0.1:$PORT$u"); [ "$c" = 401 ] || [ "$c" = 403 ] || ok=0; done; [ $ok = 1 ] && [ "$(tk -o /dev/null -w %{http_code} -X POST --data "id=x&sql=select+1" http://127.0.0.1:$PORT/api/db/sql)" != 200 ]'
+check "token errado, curto, vazio ou de outro formato => 401" 'ok=1; for t in "$(printf "0%.0s" $(seq 32))" "abc" "" "${TK}x" "${TK:0:31}"; do [ "$(TKN=$t tk -o /dev/null -w %{http_code} "http://127.0.0.1:$PORT/api/bucket/list?id=tok")" = 401 ] || ok=0; done; [ $ok = 1 ]'
+check "token do bucket: traversal continua barrado (a validação é a mesma)" '[ "$(tk -o /dev/null -w %{http_code} "http://127.0.0.1:$PORT/api/bucket/file?id=tok&key=../outro/x")" = 404 ] && [ "$(tk -o /dev/null -w %{http_code} -X POST --data-binary @"$T/c.txt" "http://127.0.0.1:$PORT/api/bucket/upload?id=tok&key=../escapou")" = 400 ]'
+OLD=$TK; api ana POST /api/bucket/update "id=tok&rotate=1" >/dev/null; TK=$(bktok tok)
+check "girar o token invalida o antigo na hora e o novo funciona" '[ "$TK" != "$OLD" ] && [ "$(TKN=$OLD tk -o /dev/null -w %{http_code} "http://127.0.0.1:$PORT/api/bucket/list?id=tok")" = 401 ] && tk "http://127.0.0.1:$PORT/api/bucket/list?id=tok" | grep -q entries'
+check "app só liga bucket que existe e que o dono enxerga; compartilhado só com compartilhado" 'api ana POST /api/app/save "name=BkApp&scope=private&repo=acme/dock&runtime=podman&cport=8080&bucket=nao-existe" | grep -q "Bucket não encontrado" && api beto POST /api/app/save "name=BkBeto&scope=private&repo=acme/dock&runtime=podman&bucket=tok" | grep -q "Bucket não encontrado" && api ana POST /api/app/save "name=BkSh&scope=shared&repo=acme/dock&runtime=podman&bucket=tok" | grep -q "só pode usar bucket compartilhado"'
+: > "$PODMAN_ENV"; : > "$PODMAN_LOG"
+api ana POST /api/app/save "name=BkApp&scope=private&repo=acme/dock&runtime=podman&cport=8080&bucket=tok&deploy=1" >/dev/null; sleep 5
+RUNB=$(grep "^run " "$PODMAN_LOG" | tail -1)
+check "app ligado: BUCKET_URL, BUCKET_NAME e BUCKET_TOKEN chegam pelo ambiente; token nunca no argv; rede para o loopback do host" 'grep -q "^BUCKET_URL=http://host.containers.internal:$PORT$" "$PODMAN_ENV" && grep -q "^BUCKET_NAME=tok$" "$PODMAN_ENV" && grep -q "^BUCKET_TOKEN=$TK$" "$PODMAN_ENV" && echo "$RUNB" | grep -q -- "-e BUCKET_TOKEN " && ! echo "$RUNB" | grep -q "$TK" && echo "$RUNB" | grep -q -- "--map-host-loopback"'
+check "bucket em uso por app não pode ser apagado" 'api ana POST /api/bucket/delete "id=tok" | grep -q "ligado a uma aplicação"'
+check "overview mostra o bucket do app" 'api ana GET /api/overview | python3 -c "import sys,json; a=[x for x in json.load(sys.stdin)[\"apps\"] if x[\"id\"]==\"bkapp\"][0]; assert a[\"bucket\"]==\"tok\""'
+api ana POST "/api/app/delete?id=bkapp" >/dev/null
+check "depois de desligar o app o bucket pode ser apagado" 'api ana POST /api/bucket/delete "id=tok" | grep -q ok && api ana POST /api/bucket/delete "id=outro" | grep -q ok && [ ! -e "$APP/buckets/tok" ]'
 stop_hosting; "$T/hosting" -c "$T/hosting.conf" 2>>"$T/err.log" & sleep 3
 check "bucket: configuração e totais sobrevivem ao reinício" 'api ana GET /api/overview | python3 -c "import sys,json; b={x[\"id\"]:x for x in json.load(sys.stdin)[\"buckets\"]}; assert b[\"fotos-da-casa\"][\"public\"]==1 and b[\"fotos-da-casa\"][\"files\"]==2 and \"comum\" in b"'
 check "bucket: apagar remove pasta e configuração (beto não apaga o da ana)" 'BK=$H bkapi fotos-da-casa delete | grep -q "não encontrado" && [ -d "$APP/buckets/fotos-da-casa" ] && bkapi fotos-da-casa delete | grep -q ok && [ ! -e "$APP/buckets/fotos-da-casa" ] && [ ! -e "$APP/buckets/fotos-da-casa.conf" ] && ! api ana GET /api/overview | grep -q fotos-da-casa'

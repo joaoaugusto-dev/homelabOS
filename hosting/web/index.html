@@ -188,6 +188,7 @@
       </div>
       <label class="field"><span>Endereço público <em>(opcional)</em></span><input name="host" list="dom-list" placeholder="app.seudominio.com" spellcheck="false" autocapitalize="none"><datalist id="dom-list"></datalist><small class="hint">Termina em um dos seus domínios. O servidor cria o DNS e a rota sozinho.</small></label>
       <label class="field"><span>Banco de dados <em>(opcional)</em></span><select name="db" id="app-db"></select><small class="hint">O app recebe DATABASE_URL, DB_HOST, DB_USER, DB_PASSWORD e DB_NAME.</small></label>
+      <label class="field"><span>Bucket de arquivos <em>(opcional)</em></span><select name="bucket" id="app-bucket"></select><small class="hint">O app recebe BUCKET_URL, BUCKET_NAME e BUCKET_TOKEN: acesso só a esse bucket, pela API HTTP do painel (veja o botão API no bucket).</small></label>
       <label class="field"><span>Variáveis de ambiente <em>(uma por linha: NOME=valor)</em></span><textarea name="env" rows="3" spellcheck="false" placeholder="NODE_ENV=production"></textarea></label>
       <details class="adv">
         <summary>Execução avançada</summary>
@@ -243,6 +244,14 @@
     <p class="form-error" id="bk-err" role="alert"></p>
     <div class="dlg-b"><button type="button" class="btn" data-close>Cancelar</button><button class="btn primary" id="bk-ok">Criar bucket</button></div>
   </form>
+</dialog>
+
+<!-- acesso de apps a um bucket -->
+<dialog id="dlg-api">
+  <div class="dlg wide">
+    <div class="dlg-head"><h2 id="api-t">Acesso por API</h2><button type="button" class="icon-btn" data-close aria-label="Fechar"><svg class="ic"><use href="#i-x"/></svg></button></div>
+    <div class="dlg-body" id="api-body"></div>
+  </div>
 </dialog>
 
 <!-- pedir um nome (pasta nova, renomear) -->

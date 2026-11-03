@@ -96,8 +96,15 @@ API: `GET /api/deploys?app=&limit=`, `GET /api/deploy/log?id=&ts=`.
 A seção **Arquivos** guarda arquivos de qualquer tipo em buckets (`data/buckets/<id>/`), privados ou compartilhados como o resto: pastas, envio de vários arquivos ou de uma pasta inteira (arrastar e soltar), miniaturas de imagem, visualização de imagem/vídeo/áudio/PDF/texto, renomear/mover, baixar e apagar. Até 2 GB por arquivo.
 - **Público na rede local** (opcional, por bucket): `GET /b/<bucket>/<caminho>` abre o arquivo **sem login** para quem alcança a porta do painel (LAN/Tailscale). **Nunca pelo túnel**: pedidos com `Cf-Connecting-Ip`/`X-Forwarded-*` só alcançam `/hook/`.
 - **Segurança dos arquivos**: caminhos sem `..`, sem `.`, sem segmento vazio e sem controle; além disso o caminho é resolvido com `realpath` e precisa ficar dentro do bucket (uma pasta-link para fora não vaza nem aceita escrita). HTML, JS, CSS e XML enviados são servidos como `text/plain`, SVG com `Content-Security-Policy: sandbox` e `nosniff` em tudo; o que o navegador não abre vira download. Há suporte a `Range` (vídeo e áudio andam).
-- Os apps **não** enxergam `data/` (sandbox): o acesso é pelo painel, por `Authorization: Bearer` (token de API) ou pelo link público.
-- API: `GET /api/bucket/list|file`, `POST /api/bucket/create|update|delete|upload|rm|mv|mkdir`.
+- **Usar o bucket a partir de um app**: em *Editar aplicação* escolha o **Bucket de arquivos** (como o banco). O app passa a receber `BUCKET_URL` (`http://127.0.0.1:<porta do painel>`, ou `host.containers.internal` em container), `BUCKET_NAME` e `BUCKET_TOKEN`. Esse token é **só daquele bucket**: lista, lê, envia, move e apaga arquivos dele e nada mais (não cria nem apaga buckets, não vê bancos, apps, deploys nem outros buckets; `403`/`404`). Exemplos no botão **API** do bucket:
+  ```
+  curl -H "Authorization: Bearer $BUCKET_TOKEN" "$BUCKET_URL/api/bucket/list?id=$BUCKET_NAME&prefix=fotos"
+  curl -X POST -H "Authorization: Bearer $BUCKET_TOKEN" -H "X-Requested-With: hosting" --data-binary @foto.jpg "$BUCKET_URL/api/bucket/upload?id=$BUCKET_NAME&key=fotos/foto.jpg"
+  curl -H "Authorization: Bearer $BUCKET_TOKEN" "$BUCKET_URL/api/bucket/file?id=$BUCKET_NAME&key=fotos/foto.jpg"
+  ```
+  O token fica em `data/buckets/<id>.conf` (0600). **Gerar novo token** (`POST /api/bucket/update` com `rotate=1`) invalida o antigo na hora; apps ligados recebem o novo ao reiniciar. Bucket ligado a um app não pode ser apagado, e app compartilhado só liga bucket compartilhado.
+- Fora isso, os apps **não** enxergam `data/` (sandbox): o acesso é pelo painel, pelo token de API do administrador (`Authorization: Bearer`) ou pelo link público.
+- API: `GET /api/bucket/list|file`, `POST /api/bucket/create|update|delete|upload|rm|mv|mkdir` (o token de bucket só vale em `list`, `file`, `upload`, `rm`, `mv`, `mkdir`).
 
 ## Configuração (`hosting.conf`)
 Veja [`hosting.conf.example`](hosting.conf.example): `port`, `bind` (padrão `127.0.0.1`), `web`, `data`, `dash_ports`, `admin`, `native_users`, `cert_domain`, `tunnel`, `sandbox`, `behind_proxy`.

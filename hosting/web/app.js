@@ -177,6 +177,11 @@ function dbOptions(scope, cur) {
   D.dbs.filter((d) => scope !== "shared" || d.owner === "shared").forEach((d) => sel.append(h("option", { value: d.id }, `${d.name} · ${d.engine === "postgres" ? "PostgreSQL" : "MySQL"}${d.owner === "shared" ? " · compartilhado" : ""}`)));
   sel.value = cur || "";
 }
+function bucketOptions(scope, cur) {
+  const sel = $("#app-bucket"); sel.replaceChildren(h("option", { value: "" }, "Nenhum"));
+  D.buckets.filter((b) => scope !== "shared" || b.owner === "shared").forEach((b) => sel.append(h("option", { value: b.id }, `${b.name}${b.owner === "shared" ? " · compartilhado" : ""}`)));
+  sel.value = cur || "";
+}
 function setSource(k) {
   segSet($("#app-src"), "k", k);
   const zip = k === "zip";
@@ -206,7 +211,7 @@ function openAppForm(a) {
   $("#dom-list").replaceChildren(...D.domains.map((d) => h("option", { value: d.name })));
   const names = D.domains.map((d) => d.name).join(", ");
   $("input[name=host]").nextElementSibling.nextElementSibling.textContent = names ? `Termina em um dos seus domínios: ${names}. O servidor cria o DNS e a rota sozinho.` : "Você ainda não tem domínio cadastrado: adicione um na aba Domínios.";
-  dbOptions(segValue($("#app-scope"), "s"), a?.db);
+  dbOptions(segValue($("#app-scope"), "s"), a?.db); bucketOptions(segValue($("#app-scope"), "s"), a?.bucket);
   const nat = !!D.native; // sem direito a comandos no servidor: só container (o servidor também impõe isso)
   for (const k of ["runtime", "build", "start"]) el[k].disabled = !nat;
   if (!nat) el.runtime.value = "podman";
@@ -214,7 +219,7 @@ function openAppForm(a) {
   $(".adv").open = !nat || !!(a && (a.build || a.start || a.volume || a.runtime !== "auto"));
   $("#dlg-app").showModal(); el.name.focus();
 }
-$("#app-scope").addEventListener("change", () => dbOptions(segValue($("#app-scope"), "s"), $("#app-db").value));
+$("#app-scope").addEventListener("change", () => { dbOptions(segValue($("#app-scope"), "s"), $("#app-db").value); bucketOptions(segValue($("#app-scope"), "s"), $("#app-bucket").value); });
 $("#app-new").addEventListener("click", () => openAppForm());
 $("#app-form").addEventListener("submit", async (e) => {
   e.preventDefault();
@@ -223,7 +228,7 @@ $("#app-form").addEventListener("submit", async (e) => {
   const zip = segValue($("#app-src"), "k") === "zip", file = el.file.files[0];
   if (zip && !editing && !file) { err.textContent = "Escolha o arquivo .zip ou .tar.gz do projeto."; return; }
   const data = {
-    name: el.name.value, scope: segValue($("#app-scope"), "s"), source: zip ? "zip" : "github", repo: el.repo.value, branch: el.branch.value, token: el.token.value, host: el.host.value, db: el.db.value,
+    name: el.name.value, scope: segValue($("#app-scope"), "s"), source: zip ? "zip" : "github", repo: el.repo.value, branch: el.branch.value, token: el.token.value, host: el.host.value, db: el.db.value, bucket: el.bucket.value,
     env: el.env.value, runtime: el.runtime.value, build: el.build.value, start: el.start.value, cport: el.cport.value, mem: el.mem.value, volume: el.volume.value,
     port: el.port.value, expose: el.expose.checked ? "1" : "0",
     autodeploy: el.autodeploy.checked && !zip ? "1" : "0", deploy: el.deploy.checked && !zip ? "1" : "0",
@@ -634,6 +639,7 @@ function renderBuckets() {
     btn("Enviar arquivos", "up", { primary: true, onclick: () => pick(false) }), btn("Enviar pasta", "folder", { onclick: () => pick(true) }),
     btn("Nova pasta", "plus", { onclick: async () => { const n = await askName({ title: "Nova pasta", ok: "Criar" }); if (n) bkOp("mkdir", { key: BK.path ? `${BK.path}/${n}` : n }, "Pasta criada"); } }),
     btn(b.public ? "Público" : "Privado", b.public ? "globe" : "lock", { title: b.public ? "Qualquer pessoa na rede local abre /b/" + b.id + "/…. Clique para tornar privado." : "Clique para abrir os arquivos na rede local sem login.", onclick: () => act("/api/bucket/update", { id: b.id, pub: b.public ? "0" : "1" }, b.public ? "Bucket agora é privado" : "Bucket público na rede local") }),
+    btn("API", "term", { title: "Como um app acessa este bucket (URL, token e exemplos)", onclick: () => openBkApi(b) }),
     iconBtn("trash", "Excluir bucket", async () => { if (await confirmDlg({ title: `Excluir o bucket “${b.name}”?`, text: `Apaga ${nf0.format(b.files)} arquivo(s) (${bytesF(b.bytes)}). Não dá para desfazer.`, ok: "Excluir" })) { const j = await act("/api/bucket/delete", { id: b.id }, "Bucket excluído"); if (j) location.hash = "#arquivos"; } })));
   if (!BK.list) { body.replaceChildren(h("p", { class: "muted" }, "Carregando…")); return; }
   const es = BK.list.slice().sort((x, y) => y.dir - x.dir || x.name.localeCompare(y.name, "pt-BR", { numeric: true }));
@@ -699,6 +705,21 @@ function bkPreview(b, k, e, kind) {
   $("#dlg-pv").showModal();
 }
 $("#dlg-pv").addEventListener("close", () => $("#pv-body").replaceChildren());
+function openBkApi(b) {
+  const users = D.apps.filter((a) => a.bucket === b.id).map((a) => a.name), base = `http://${location.hostname}:${location.port || 80}`;
+  const code = (t) => h("pre", { class: "logbox", style: "margin:0;height:auto;max-height:160px" }, t);
+  $("#api-t").textContent = `API do bucket “${b.name}”`;
+  $("#api-body").replaceChildren(
+    h("div", { class: "notice" }, users.length ? h("span", {}, h("b", {}, `Ligado a ${users.join(", ")}. `), "O app já recebe BUCKET_URL, BUCKET_NAME e BUCKET_TOKEN no ambiente (reinicie-o depois de gerar um token novo).") : h("span", {}, h("b", {}, "Nenhum app ligado. "), "Em Editar aplicação escolha este bucket e o app recebe as variáveis sozinho; ou use o token abaixo de fora.")),
+    h("label", { class: "field" }, h("span", {}, "URL da API (rede local)"), copyField(base)),
+    h("label", { class: "field" }, h("span", {}, "Token deste bucket (só abre este bucket)"), copyField(b.token, true)),
+    h("div", { class: "field" }, h("span", {}, "Listar"), code(`curl -H "Authorization: Bearer $BUCKET_TOKEN" "$BUCKET_URL/api/bucket/list?id=${b.id}&prefix=pasta"`)),
+    h("div", { class: "field" }, h("span", {}, "Enviar (cria as pastas; substitui o arquivo de mesmo nome)"), code(`curl -X POST -H "Authorization: Bearer $BUCKET_TOKEN" -H "X-Requested-With: hosting" \\\n  --data-binary @foto.jpg "$BUCKET_URL/api/bucket/upload?id=${b.id}&key=fotos/foto.jpg"`)),
+    h("div", { class: "field" }, h("span", {}, "Baixar / mostrar"), code(`curl -H "Authorization: Bearer $BUCKET_TOKEN" "$BUCKET_URL/api/bucket/file?id=${b.id}&key=fotos/foto.jpg"`)),
+    h("p", { class: "hint" }, "Também: POST /api/bucket/rm, /mv e /mkdir (corpo id=…&key=…), sempre com X-Requested-With: hosting. O token não consegue criar nem apagar buckets, nem ver bancos ou apps. Dentro de container o endereço é host.containers.internal."),
+    h("div", {}, btn("Gerar novo token", "redo", { onclick: async () => { if (await confirmDlg({ title: "Gerar um token novo?", text: "O token atual deixa de valer na hora. Apps ligados recebem o novo ao reiniciar.", ok: "Gerar" })) { const j = await act("/api/bucket/update", { id: b.id, rotate: "1" }, "Token novo gerado"); if (j) { await refresh(); const nb = D.buckets.find((x) => x.id === b.id); if (nb) openBkApi(nb); } } } })));
+  $("#dlg-api").showModal();
+}
 function openBkForm() { $("#bk-form").reset(); $("#bk-err").textContent = ""; segSet($("#bk-scope"), "s", "private"); $("#dlg-bk").showModal(); $("#bk-form").elements.name.focus(); }
 $("#bk-form").addEventListener("submit", async (e) => {
   e.preventDefault();

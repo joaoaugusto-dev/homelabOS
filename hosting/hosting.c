@@ -336,7 +336,7 @@ static int can(const char *me, const char *owner) { return !strcmp(owner, "share
 
 typedef struct {
     int used;
-    char id[32], name[64], owner[16], repo[96], branch[64], token[128], build[400], start[400], runtime[8], host[128], db[40], secret[33], volume[96], env[2048];
+    char id[32], name[64], owner[16], repo[96], branch[64], token[128], build[400], start[400], runtime[8], host[128], db[40], bucket[40], secret[33], volume[96], env[2048];
     char commit[41], msg[120], rt[8], last[160], upname[100];
     int nat; // 1 = pode rodar comandos nativos no servidor (a última edição foi de quem tem esse direito)
     int port, iport, cport, mem, autodeploy, want, expose; // port = pública (proxy), iport = onde o app de verdade escuta (127.0.0.1)
@@ -346,7 +346,7 @@ typedef struct {
 } App;
 typedef struct { int used; char id[40], name[64], engine[12], owner[16], user[40], pw[33]; time_t created; } Db;
 typedef struct { int used; char name[128], owner[16], token[96]; int cert; } Domain;
-typedef struct { int used; char id[40], name[64], owner[16]; int pub; time_t created; long long bytes, files; } Bucket; // pasta de arquivos (ver "buckets")
+typedef struct { int used; char id[40], name[64], owner[16], token[33]; int pub; time_t created; long long bytes, files; } Bucket; // pasta de arquivos (ver "buckets")
 
 #define MAXAPP 64
 #define MAXDB 64
@@ -400,7 +400,7 @@ static void app_save(App *a) { // chamar travado
     app_dir(d, sizeof d, a->id); mkdirp(d);
     snprintf(p, sizeof p, "%s/app.conf", d);
     sb b = {0};
-    sb_f(&b, "name=%s\nowner=%s\nrepo=%s\nbranch=%s\ntoken=%s\nbuild=%s\nstart=%s\nruntime=%s\nhost=%s\ndb=%s\nsecret=%s\nvolume=%s\n", a->name, a->owner, a->repo, a->branch, a->token, a->build, a->start, a->runtime, a->host, a->db, a->secret, a->volume);
+    sb_f(&b, "name=%s\nowner=%s\nrepo=%s\nbranch=%s\ntoken=%s\nbuild=%s\nstart=%s\nruntime=%s\nhost=%s\ndb=%s\nbucket=%s\nsecret=%s\nvolume=%s\n", a->name, a->owner, a->repo, a->branch, a->token, a->build, a->start, a->runtime, a->host, a->db, a->bucket, a->secret, a->volume);
     sb_f(&b, "port=%d\niport=%d\ncport=%d\nmem=%d\nautodeploy=%d\nwant=%d\nexpose=%d\ncommit=%s\nmsg=%s\ndeployed=%lld\nrt=%s\nlast=%s\nupname=%s\nnat=%d\n", a->port, a->iport, a->cport, a->mem, a->autodeploy, a->want, a->expose, a->commit, a->msg, (long long)a->deployed, a->rt, a->last, a->upname, a->nat);
     for (char *s = a->env; *s;) { size_t n = strcspn(s, "\n"); sb_add(&b, "env=", 4); sb_add(&b, s, n); sb_add(&b, "\n", 1); s += n + (s[n] ? 1 : 0); }
     int fd = open(p, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0600); // guarda token do GitHub: só o dono lê
@@ -424,7 +424,7 @@ static void app_load(const char *id) {
         if (kvs(l, "name", a->name, sizeof a->name) || kvs(l, "owner", a->owner, sizeof a->owner) || kvs(l, "repo", a->repo, sizeof a->repo) ||
             kvs(l, "branch", a->branch, sizeof a->branch) || kvs(l, "token", a->token, sizeof a->token) || kvs(l, "build", a->build, sizeof a->build) ||
             kvs(l, "start", a->start, sizeof a->start) || kvs(l, "runtime", a->runtime, sizeof a->runtime) || kvs(l, "host", a->host, sizeof a->host) ||
-            kvs(l, "db", a->db, sizeof a->db) || kvs(l, "secret", a->secret, sizeof a->secret) || kvs(l, "volume", a->volume, sizeof a->volume) ||
+            kvs(l, "db", a->db, sizeof a->db) || kvs(l, "bucket", a->bucket, sizeof a->bucket) || kvs(l, "secret", a->secret, sizeof a->secret) || kvs(l, "volume", a->volume, sizeof a->volume) ||
             kvs(l, "commit", a->commit, sizeof a->commit) || kvs(l, "msg", a->msg, sizeof a->msg) || kvs(l, "rt", a->rt, sizeof a->rt) || kvs(l, "last", a->last, sizeof a->last) || kvs(l, "upname", a->upname, sizeof a->upname)) continue;
         if (kvn(l, "port", &v)) a->port = v; else if (kvn(l, "iport", &v)) a->iport = v; else if (kvn(l, "cport", &v)) a->cport = v; else if (kvn(l, "mem", &v)) a->mem = v;
         else if (kvn(l, "nat", &v)) a->nat = v; else if (kvn(l, "expose", &v)) a->expose = v; else if (kvn(l, "autodeploy", &v)) a->autodeploy = v; else if (kvn(l, "want", &v)) a->want = v; else if (kvn(l, "deployed", &v)) a->deployed = v;
@@ -685,10 +685,11 @@ static int env_dup(char **dst, int n, const char *e) {
     for (int i = 0; i < n; i++) if (!strncmp(dst[i], e, k) && dst[i][k] == '=') return 1;
     return 0;
 }
+static Bucket *bk_find(const char *id);
 static void app_env_list(const App *a, char **dst, int *n, int max, int podman) { // KEY=VAL do usuário + banco vinculado
     char port[24]; Db *d = a->db[0] ? db_find(a->db) : NULL;
     const char *host = podman ? "host.containers.internal" : "127.0.0.1";
-    if (*n + 8 >= max) return;
+    if (*n + 12 >= max) return;
     snprintf(port, sizeof port, "PORT=%d", podman ? a->cport : a->iport); dst[(*n)++] = strdup(port);
     dst[(*n)++] = strdup(podman && a->expose ? "HOST=0.0.0.0" : "HOST=127.0.0.1"); // o proxy contador é quem abre para a rede; o app só precisa do loopback
     if (d) {
@@ -700,6 +701,13 @@ static void app_env_list(const App *a, char **dst, int *n, int max, int podman) 
         snprintf(t, sizeof t, "DB_USER=%s", d->user); dst[(*n)++] = strdup(t);
         snprintf(t, sizeof t, "DB_PASSWORD=%s", d->pw); dst[(*n)++] = strdup(t);
         snprintf(t, sizeof t, "DB_NAME=%s", d->user); dst[(*n)++] = strdup(t);
+    }
+    Bucket *bk = a->bucket[0] ? bk_find(a->bucket) : NULL;
+    if (bk) { // credencial só deste bucket (não vale para o resto do painel); o app usa a API HTTP do painel
+        char t[200];
+        snprintf(t, sizeof t, "BUCKET_URL=http://%s:%d", host, cfg.port); dst[(*n)++] = strdup(t);
+        snprintf(t, sizeof t, "BUCKET_NAME=%s", bk->id); dst[(*n)++] = strdup(t);
+        snprintf(t, sizeof t, "BUCKET_TOKEN=%s", bk->token); dst[(*n)++] = strdup(t);
     }
     char *e = strdup(a->env), *sv, *l;
     for (l = strtok_r(e, "\n", &sv); l && *n < max - 1; l = strtok_r(NULL, "\n", &sv)) dst[(*n)++] = strdup(l);
@@ -726,7 +734,7 @@ static void app_spawn(App *a) {
     char t[PATH_MAX + 32], adir[PATH_MAX] = "";
     if (pod) {
         av[na++] = "podman"; av[na++] = "run"; av[na++] = "--rm";
-        if (a->db[0]) av[na++] = "--network=pasta:--map-host-loopback,169.254.1.2"; // host.containers.internal -> loopback do host (onde o banco escuta)
+        if (a->db[0] || a->bucket[0]) av[na++] = "--network=pasta:--map-host-loopback,169.254.1.2"; // host.containers.internal -> loopback do host (banco e painel)
         av[na++] = "--name";
         snprintf(t, sizeof t, "hs-%s", a->id); av[na++] = own[no++] = strdup(t);
         av[na++] = "--security-opt"; av[na++] = "no-new-privileges"; av[na++] = "--cap-drop=NET_RAW"; av[na++] = "--pids-limit=1024"; av[na++] = "--memory";
@@ -1899,7 +1907,7 @@ static void overview(int c, const char *me) {
         sb_str(&b, a->id);
 #define JS(k, v) sb_add(&b, ",\"" k "\":", sizeof k + 3), sb_str(&b, v)
         JS("name", a->name); JS("owner", a->owner); JS("repo", a->repo); JS("branch", a->branch); JS("build", a->build); JS("start", a->start);
-        JS("runtime", a->runtime); JS("rt", a->rt); JS("host", a->host); JS("db", a->db); JS("volume", a->volume); JS("env", a->env);
+        JS("runtime", a->runtime); JS("rt", a->rt); JS("host", a->host); JS("db", a->db); JS("bucket", a->bucket); JS("volume", a->volume); JS("env", a->env);
         JS("commit", a->commit); JS("msg", a->msg); JS("last", a->last); JS("state", app_state(a)); JS("secret", a->secret); JS("upname", a->upname);
         int on; long long vis; stats_brief(a->id, &on, &vis);
         sb_f(&b, ",\"online\":%d,\"vis\":%lld,\"iport\":%d", on, vis, a->iport);
@@ -1920,7 +1928,7 @@ static void overview(int c, const char *me) {
         Bucket *k = &bks[i];
         if (!k->used || !can(me, k->owner)) continue;
         sb_add(&b, first ? "{\"id\":" : ",{\"id\":", first ? 6 : 7); first = 0;
-        sb_str(&b, k->id); JS("name", k->name); JS("owner", k->owner);
+        sb_str(&b, k->id); JS("name", k->name); JS("owner", k->owner); JS("token", k->token);
         sb_f(&b, ",\"public\":%d,\"bytes\":%lld,\"files\":%lld,\"created\":%lld}", k->pub, k->bytes, k->files, (long long)k->created);
     }
     sb_add(&b, "],\"domains\":[", 13); first = 1;
@@ -1983,7 +1991,7 @@ static void api_app_save(int c, const Req *rq, const char *me) {
     fget(f, "id", id, sizeof id); fget(f, "scope", scope, sizeof scope);
     fget(f, "name", n.name, sizeof n.name); fget(f, "repo", repo_in, sizeof repo_in); fget(f, "branch", n.branch, sizeof n.branch);
     fget(f, "token", tok, sizeof tok); fget(f, "build", n.build, sizeof n.build); fget(f, "start", n.start, sizeof n.start);
-    fget(f, "runtime", n.runtime, sizeof n.runtime); fget(f, "host", n.host, sizeof n.host); fget(f, "db", n.db, sizeof n.db);
+    fget(f, "runtime", n.runtime, sizeof n.runtime); fget(f, "host", n.host, sizeof n.host); fget(f, "db", n.db, sizeof n.db); fget(f, "bucket", n.bucket, sizeof n.bucket);
     fget(f, "volume", n.volume, sizeof n.volume); fget(f, "env", n.env, sizeof n.env);
     fget(f, "cport", tmp, sizeof tmp); n.cport = atoi(tmp); fget(f, "mem", tmp, sizeof tmp); n.mem = atoi(tmp);
     fget(f, "autodeploy", dep, sizeof dep); n.autodeploy = dep[0] == '1'; fget(f, "deploy", act, sizeof act);
@@ -2040,6 +2048,11 @@ static void api_app_save(int c, const Req *rq, const char *me) {
         Db *d = db_find(n.db);
         if (!d || !can(me, d->owner)) { pthread_mutex_unlock(&gmx); jerr(c, 400, "Banco de dados não encontrado."); return; }
         if (!strcmp(owner, "shared") && strcmp(d->owner, "shared")) { pthread_mutex_unlock(&gmx); jerr(c, 400, "Aplicação compartilhada só pode usar banco compartilhado."); return; }
+    }
+    if (n.bucket[0]) {
+        Bucket *k = bk_find(n.bucket);
+        if (!k || !can(me, k->owner)) { pthread_mutex_unlock(&gmx); jerr(c, 400, "Bucket não encontrado."); return; }
+        if (!strcmp(owner, "shared") && strcmp(k->owner, "shared")) { pthread_mutex_unlock(&gmx); jerr(c, 400, "Aplicação compartilhada só pode usar bucket compartilhado."); return; }
     }
     int want_port = atoi(ptxt);
     if (want_port) {
@@ -2493,7 +2506,7 @@ static Bucket *bk_find(const char *id) {
 }
 static void bk_save(const Bucket *b) {
     char p[PATH_MAX], t[400]; dpath(p, sizeof p, "buckets/%s.conf", b->id);
-    snprintf(t, sizeof t, "name=%s\nowner=%s\npublic=%d\ncreated=%lld\n", b->name, b->owner, b->pub, (long long)b->created);
+    snprintf(t, sizeof t, "name=%s\nowner=%s\ntoken=%s\npublic=%d\ncreated=%lld\n", b->name, b->owner, b->token, b->pub, (long long)b->created);
     int fd = open(p, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0600);
     if (fd >= 0) { if (write(fd, t, strlen(t)) < 0) {} close(fd); }
 }
@@ -2518,11 +2531,12 @@ static void bk_load_all(void) {
         long long v;
         while (fgets(l, sizeof l, f)) {
             l[strcspn(l, "\r\n")] = 0;
-            if (kvs(l, "name", x->name, sizeof x->name) || kvs(l, "owner", x->owner, sizeof x->owner)) continue;
+            if (kvs(l, "name", x->name, sizeof x->name) || kvs(l, "owner", x->owner, sizeof x->owner) || kvs(l, "token", x->token, sizeof x->token)) continue;
             if (kvn(l, "public", &v)) x->pub = v != 0; else if (kvn(l, "created", &v)) x->created = v;
         }
         fclose(f);
         x->used = x->owner[0] != 0; n += x->used;
+        if (x->used && !x->token[0]) { rand_hex(x->token, 16); bk_save(x); } // buckets criados antes do token
     }
     closedir(d);
     for (int i = 0; i < MAXBK; i++) if (bks[i].used) bk_rescan(bks[i].id);
@@ -2540,9 +2554,10 @@ static int bk_key_ok(const char *k) {
 }
 static void bk_norm(char *k) { size_t n = strlen(k); while (n && k[n-1] == '/') k[--n] = 0; }
 static void bk_path(char *o, size_t cap, const char *id, const char *key) { if (key[0]) dpath(o, cap, "buckets/%s/%s", id, key); else dpath(o, cap, "buckets/%s", id); }
+static __thread char scope_bk[40]; // credencial de app (token do bucket): só vale para este bucket
 static int bk_get(int c, const char *me, const char *id, Bucket *out) {
     pthread_mutex_lock(&gmx);
-    Bucket *b = bk_find(id); int ok = b && can(me, b->owner);
+    Bucket *b = bk_find(id); int ok = b && can(me, b->owner) && (!scope_bk[0] || !strcmp(scope_bk, id));
     if (ok) *out = *b;
     pthread_mutex_unlock(&gmx);
     if (!ok) jerr(c, 404, "bucket não encontrado");
@@ -2641,6 +2656,20 @@ static void bk_public(int c, const Req *rq) { // GET /b/<id>/<caminho>: só se o
     char key[BK_KEY + 8]; snprintf(key, sizeof key, "%s", sl + 1); bk_norm(key);
     bk_send(c, rq, id, key, 0);
 }
+// Authorization: Bearer <token de um bucket> -> usuário dono dele, e scope_bk passa a limitar tudo a esse bucket
+static const char *bk_scoped(const char *h) {
+    if (strncasecmp(h, "Bearer ", 7) || strlen(h + 7) != 32) return NULL;
+    char owner[16] = "", id[40] = ""; int found = 0;
+    pthread_mutex_lock(&gmx);
+    for (int i = 0; i < MAXBK; i++) if (bks[i].used && bks[i].token[0] && ct_eq(bks[i].token, h + 7)) { snprintf(owner, sizeof owner, "%s", bks[i].owner); snprintf(id, sizeof id, "%s", bks[i].id); found = 1; }
+    pthread_mutex_unlock(&gmx);
+    if (!found) return NULL;
+    const char *who = !strcmp(owner, "shared") ? cfg.admin : owner;
+    int adm = is_admin(who);
+    pthread_mutex_lock(&acmx); const char *u = intern(who, adm); pthread_mutex_unlock(&acmx);
+    if (u) snprintf(scope_bk, sizeof scope_bk, "%s", id);
+    return u;
+}
 static void api_bk_create(int c, const Req *rq, const char *me) { // POST name, scope, pub
     char *f = read_body(c, rq, 2048);
     if (!f) { jerr(c, 400, "pedido inválido"); return; }
@@ -2654,7 +2683,7 @@ static void api_bk_create(int c, const Req *rq, const char *me) { // POST name, 
     if (!b) { pthread_mutex_unlock(&gmx); jerr(c, 409, "Limite de buckets atingido."); return; }
     memset(b, 0, sizeof *b);
     snprintf(b->id, sizeof b->id, "%s", id); snprintf(b->name, sizeof b->name, "%s", name); snprintf(b->owner, sizeof b->owner, "%s", !strcmp(scope, "shared") ? "shared" : me);
-    b->pub = !strcmp(pub, "1"); b->created = time(NULL); b->used = 1;
+    b->pub = !strcmp(pub, "1"); b->created = time(NULL); b->used = 1; rand_hex(b->token, 16);
     char p[PATH_MAX]; bk_path(p, sizeof p, id, ""); mkdirp(p); bk_save(b);
     pthread_mutex_unlock(&gmx);
     jok(c);
@@ -2662,10 +2691,13 @@ static void api_bk_create(int c, const Req *rq, const char *me) { // POST name, 
 static void api_bk_update(int c, const Req *rq, const char *me) { // POST id, pub
     char *f = read_body(c, rq, 1024);
     if (!f) { jerr(c, 400, "pedido inválido"); return; }
-    char id[40], pub[4]; fget(f, "id", id, sizeof id); fget(f, "pub", pub, sizeof pub);
+    char id[40], pub[4], rot[4]; fget(f, "id", id, sizeof id); fget(f, "pub", pub, sizeof pub); fget(f, "rotate", rot, sizeof rot);
     free(f);
     Bucket cp; if (!bk_get(c, me, id, &cp)) return;
-    pthread_mutex_lock(&gmx); Bucket *b = bk_find(id); if (b) { b->pub = !strcmp(pub, "1"); bk_save(b); } pthread_mutex_unlock(&gmx);
+    pthread_mutex_lock(&gmx);
+    Bucket *b = bk_find(id);
+    if (b) { if (pub[0]) b->pub = !strcmp(pub, "1"); if (!strcmp(rot, "1")) rand_hex(b->token, 16); bk_save(b); } // rotate=1 invalida o token antigo (apps ligados recebem o novo no próximo início)
+    pthread_mutex_unlock(&gmx);
     jok(c);
 }
 static void api_bk_delete(int c, const Req *rq, const char *me) { // POST id
@@ -2674,7 +2706,10 @@ static void api_bk_delete(int c, const Req *rq, const char *me) { // POST id
     char id[40]; fget(f, "id", id, sizeof id);
     free(f);
     Bucket cp; if (!bk_get(c, me, id, &cp)) return;
-    pthread_mutex_lock(&gmx); Bucket *b = bk_find(id); if (b) b->used = 0; pthread_mutex_unlock(&gmx);
+    pthread_mutex_lock(&gmx);
+    for (int i = 0; i < MAXAPP; i++) if (apps[i].used && !strcmp(apps[i].bucket, id)) { pthread_mutex_unlock(&gmx); jerr(c, 409, "Este bucket está ligado a uma aplicação. Desligue-o dela primeiro."); return; }
+    Bucket *b = bk_find(id); if (b) b->used = 0;
+    pthread_mutex_unlock(&gmx);
     char p[PATH_MAX]; bk_path(p, sizeof p, cp.id, ""); rm_rf(p);
     dpath(p, sizeof p, "buckets/%s.conf", cp.id); unlink(p);
     jok(c);
@@ -2904,8 +2939,11 @@ static void route(int c, Req *rq) {
     if (post && !strncmp(p, "/hook/", 6)) { api_hook(c, rq); return; }
     if (!post && !strncmp(p, "/b/", 3)) { bk_public(c, rq); return; }
     if (strncmp(p, "/api/", 5)) { serve_static(c, rq); return; }
+    scope_bk[0] = 0;
     const char *me = auth(rq);
+    if (!me && !strncmp(p, "/api/bucket/", 12)) me = bk_scoped(rq->authz); // token de bucket (o que o app recebe em BUCKET_TOKEN)
     if (!me) { jerr(c, 401, "faça login no painel"); return; }
+    if (scope_bk[0] && strcmp(p, "/api/bucket/list") && strcmp(p, "/api/bucket/file") && strcmp(p, "/api/bucket/upload") && strcmp(p, "/api/bucket/rm") && strcmp(p, "/api/bucket/mv") && strcmp(p, "/api/bucket/mkdir")) { jerr(c, 403, "o token do bucket só serve para listar, ler, enviar, mover e apagar arquivos dele"); return; }
     if (post && strcmp(rq->xhr, "hosting")) { jerr(c, 403, "origem não permitida"); return; } // bloqueia POST cruzado vindo de outro app/porta
     if (!strcmp(p, "/api/me")) { char b[64]; int n = snprintf(b, sizeof b, "{\"ok\":1,\"user\":\"%s\"}", me); reply(c, 200, "application/json", b, n, NULL); return; }
     if (!strcmp(p, "/api/overview")) { overview(c, me); return; }
