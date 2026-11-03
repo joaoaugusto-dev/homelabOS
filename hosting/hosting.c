@@ -24,6 +24,7 @@
 #include <sys/sendfile.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
+#include <sys/statvfs.h>
 #include <sys/syscall.h>
 #include <sys/wait.h>
 #include <time.h>
@@ -68,7 +69,7 @@ static const uint32_t K[64] = {
 #define ROR(x, n) (((x) >> (n)) | ((x) << (32 - (n))))
 static void sha_block(uint32_t *h, const uint8_t *p) {
     uint32_t w[64], a, b, c, d, e, f, g, hh;
-    for (int i = 0; i < 16; i++) w[i] = p[i*4] << 24 | p[i*4+1] << 16 | p[i*4+2] << 8 | p[i*4+3];
+    for (int i = 0; i < 16; i++) w[i] = (uint32_t)p[i*4] << 24 | (uint32_t)p[i*4+1] << 16 | (uint32_t)p[i*4+2] << 8 | p[i*4+3]; // uint32_t: um byte >= 128 deslocado em int é comportamento indefinido
     for (int i = 16; i < 64; i++) {
         uint32_t s0 = ROR(w[i-15], 7) ^ ROR(w[i-15], 18) ^ (w[i-15] >> 3);
         uint32_t s1 = ROR(w[i-2], 17) ^ ROR(w[i-2], 19) ^ (w[i-2] >> 10);
@@ -341,17 +342,20 @@ typedef struct {
     int port, iport, cport, mem, autodeploy, want, expose; // port = pública (proxy), iport = onde o app de verdade escuta (127.0.0.1)
     time_t deployed;
     // execução, não persiste
-    pid_t pid, pgid; time_t started, nextstart, term_at, pg_kill; int fails, restarts, deploying, stop_req, respawn;
+    pid_t pid, pgid; time_t started, nextstart, term_at, pg_kill, dstart; int fails, restarts, deploying, stop_req, respawn;
 } App;
 typedef struct { int used; char id[40], name[64], engine[12], owner[16], user[40], pw[33]; time_t created; } Db;
 typedef struct { int used; char name[128], owner[16], token[96]; int cert; } Domain;
+typedef struct { int used; char id[40], name[64], owner[16]; int pub; time_t created; long long bytes, files; } Bucket; // pasta de arquivos (ver "buckets")
 
 #define MAXAPP 64
 #define MAXDB 64
 #define MAXDOM 16
+#define MAXBK 32
 static App apps[MAXAPP];
 static Db dbs[MAXDB];
 static Domain doms[MAXDOM];
+static Bucket bks[MAXBK];
 static pthread_mutex_t gmx = PTHREAD_MUTEX_INITIALIZER, build_mx = PTHREAD_MUTEX_INITIALIZER;
 static char hook_host[128], tunnel_id[48];
 static int tunnel_dirty = 1, tunnel_up;
@@ -622,12 +626,34 @@ static void tunnel_write_cfg(void) { // chamar travado
 }
 
 /* ---------- ciclo de vida dos apps ---------- */
-static void hist_add(const char *id, const char *sha, const char *msg, const char *trig, const char *res, long secs) {
-    char p[PATH_MAX]; dpath(p, sizeof p, "apps/%s/history.tsv", id);
+#define KEEP_LOGS 30 // logs de deploy guardados por app (o histórico em history.tsv não é podado)
+static void hist_add(const char *id, time_t ts, const char *sha, const char *msg, const char *trig, const char *res, long secs) {
+    char p[PATH_MAX], m[200]; dpath(p, sizeof p, "apps/%s/history.tsv", id);
+    snprintf(m, sizeof m, "%s", msg);
+    for (char *q = m; *q; q++) if (*q == '\t' || *q == '\n' || *q == '\r') *q = ' '; // uma linha, campos separados por TAB
     FILE *f = fopen(p, "a");
     if (!f) return;
-    fprintf(f, "%lld\t%.7s\t%s\t%s\t%s\t%ld\n", (long long)time(NULL), sha, trig, res, msg, secs);
+    fprintf(f, "%lld\t%.7s\t%s\t%s\t%s\t%ld\n", (long long)ts, sha, trig, res, m, secs);
     fclose(f);
+}
+static int cmp_name(const void *a, const void *b) { return strcmp(a, b); }
+// guarda uma cópia do deploy.log em deploys/<ts>.log (o deploy.log é sobrescrito a cada deploy) e poda os mais antigos
+static void deploy_archive(const char *id, time_t ts) {
+    char d[PATH_MAX], src[PATH_MAX + 16], dst[PATH_MAX + 40];
+    dpath(d, sizeof d, "apps/%s/deploys", id); mkdirp(d);
+    dpath(src, sizeof src, "apps/%s/deploy.log", id); snprintf(dst, sizeof dst, "%s/%lld.log", d, (long long)ts);
+    int in = open(src, O_RDONLY | O_CLOEXEC), out = open(dst, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0640);
+    char buf[8192]; ssize_t n;
+    while (in >= 0 && out >= 0 && (n = read(in, buf, sizeof buf)) > 0) if (write(out, buf, n) != n) break;
+    if (in >= 0) close(in);
+    if (out >= 0) close(out);
+    DIR *dir = opendir(d); if (!dir) return;
+    char (*nm)[24] = malloc(256 * 24); int k = 0; struct dirent *de;
+    while ((de = readdir(dir)) && k < 256) { size_t l = strlen(de->d_name); if (l > 4 && l < 24 && !strcmp(de->d_name + l - 4, ".log")) snprintf(nm[k++], 24, "%s", de->d_name); }
+    closedir(dir);
+    qsort(nm, k, 24, cmp_name); // timestamps com o mesmo número de dígitos: ordem de texto = ordem de tempo
+    for (int i = 0; i < k - KEEP_LOGS; i++) { char q[PATH_MAX + 40]; snprintf(q, sizeof q, "%s/%s", d, nm[i]); unlink(q); }
+    free(nm);
 }
 static int port_free(int p) { // alguém no servidor já escuta nessa porta?
     int fd = socket(AF_INET, SOCK_STREAM | SOCK_CLOEXEC, 0), one = 1, r;
@@ -748,7 +774,7 @@ typedef struct { char id[32]; char trig[12]; } DeployJob;
 static int deploy_start(const char *id, const char *trig) { // chamar travado
     App *a = app_find(id);
     if (!a || a->deploying) return -1;
-    a->deploying = 1;
+    a->deploying = 1; a->dstart = time(NULL);
     DeployJob *j = malloc(sizeof *j);
     snprintf(j->id, sizeof j->id, "%s", id); snprintf(j->trig, sizeof j->trig, "%s", trig);
     pthread_t t;
@@ -886,7 +912,7 @@ static void *deploy_thread(void *arg) {
 
     char dir[PATH_MAX], src[PATH_MAX], lp[PATH_MAX], res[200] = "", sha[64] = "", msg[200] = "", rt[8];
     int detected = 0;
-    time_t t0 = time(NULL);
+    time_t t0 = time(NULL), te = 0; // te: fim do deploy (chave do histórico e do log arquivado)
     app_dir(dir, sizeof dir, A.id); mkdirp(dir);
     snprintf(src, sizeof src, "%s/src", dir); snprintf(lp, sizeof lp, "%s/deploy.log", dir);
     int fd = open(lp, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0640);
@@ -986,7 +1012,7 @@ static void *deploy_thread(void *arg) {
         app_save(ap);
     }
     pthread_mutex_unlock(&gmx);
-    hist_add(j->id, sha, msg, j->trig, "ok", (long)(time(NULL) - t0));
+    te = time(NULL); hist_add(j->id, te, sha, msg, j->trig, "ok", (long)(te - t0));
     goto end;
 fail_free:
     for (int i = 0; i < nu; i++) free(uenv[i]);
@@ -995,9 +1021,10 @@ fail:
     pthread_mutex_lock(&gmx);
     if ((ap = app_find(j->id))) { snprintf(ap->last, sizeof ap->last, "%s", res); ap->deploying = 0; app_save(ap); }
     pthread_mutex_unlock(&gmx);
-    hist_add(j->id, sha[0] ? sha : "-", msg[0] ? msg : "-", j->trig, "erro", (long)(time(NULL) - t0));
+    te = time(NULL); hist_add(j->id, te, sha[0] ? sha : "-", msg[0] ? msg : "-", j->trig, "erro", (long)(te - t0));
 end:
     if (fd >= 0) close(fd);
+    if (te) deploy_archive(j->id, te);
     pthread_mutex_unlock(&build_mx);
     free(j);
     return NULL;
@@ -1141,7 +1168,8 @@ static void *poller(void *arg) {
 
 /* ---------- http ---------- */
 typedef struct {
-    char method[8], path[512], query[1024], cookie[256], ip[48], xhr[24], sig[80], event[24], authz[160];
+    char method[8], path[512], query[2048], cookie[256], ip[48], xhr[24], sig[80], event[24], authz[160], range[64];
+    int chunked;
     int public; // veio pela internet (túnel do Cloudflare ou outro proxy reverso): só /hook/
     long long clen;
     const char *extra; size_t extra_len;
@@ -1887,6 +1915,14 @@ static void overview(int c, const char *me) {
         sb_str(&b, d->id); JS("name", d->name); JS("engine", d->engine); JS("owner", d->owner); JS("user", d->user); JS("password", d->pw);
         sb_f(&b, ",\"port\":%d,\"created\":%lld}", pg ? 5432 : 3306, (long long)d->created);
     }
+    sb_add(&b, "],\"buckets\":[", 13); first = 1;
+    for (int i = 0; i < MAXBK; i++) {
+        Bucket *k = &bks[i];
+        if (!k->used || !can(me, k->owner)) continue;
+        sb_add(&b, first ? "{\"id\":" : ",{\"id\":", first ? 6 : 7); first = 0;
+        sb_str(&b, k->id); JS("name", k->name); JS("owner", k->owner);
+        sb_f(&b, ",\"public\":%d,\"bytes\":%lld,\"files\":%lld,\"created\":%lld}", k->pub, k->bytes, k->files, (long long)k->created);
+    }
     sb_add(&b, "],\"domains\":[", 13); first = 1;
     for (int i = 0; i < MAXDOM; i++) {
         if (!doms[i].used || !can(me, doms[i].owner)) continue;
@@ -2102,6 +2138,24 @@ static void api_app_delete(int c, const Req *rq, const char *me) {
     jok(c);
 }
 
+// grava o corpo da requisição (rq->clen bytes) em tmp, em streaming (nada fica na memória); 0 = ok, senão remove tmp
+static int body_to_file(int c, const Req *rq, const char *tmp) {
+    int fd = open(tmp, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0640);
+    if (fd < 0) return -1;
+    long long left = rq->clen; int bad = 0;
+    size_t first = rq->extra_len < (size_t)left ? rq->extra_len : (size_t)left;
+    if (first && write(fd, rq->extra, first) != (ssize_t)first) bad = 1;
+    left -= first;
+    static __thread char buf[65536];
+    while (left > 0 && !bad) {
+        ssize_t r = recv(c, buf, left < (long long)sizeof buf ? left : (long long)sizeof buf, 0);
+        if (r <= 0 || write(fd, buf, r) != r) bad = 1; else left -= r;
+    }
+    close(fd);
+    if (bad) { unlink(tmp); return -1; }
+    return 0;
+}
+
 // POST /api/app/upload?id=&name=  corpo = o arquivo (.zip ou .tar.gz); grava em streaming e dispara o deploy
 #define UPLOAD_MAX (500LL << 20)
 static void api_upload(int c, const Req *rq, const char *me) {
@@ -2116,19 +2170,7 @@ static void api_upload(int c, const Req *rq, const char *me) {
     if (rq->clen <= 0 || rq->clen > UPLOAD_MAX) { jerr(c, 413, "Arquivo vazio ou maior que 500 MB."); return; }
     app_dir(d, sizeof d, id); mkdirp(d);
     snprintf(tmp, sizeof tmp, "%s/upload.tmp", d); snprintf(fin, sizeof fin, "%s/upload.bin", d);
-    int fd = open(tmp, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0640);
-    if (fd < 0) { jerr(c, 500, "não consegui gravar o arquivo"); return; }
-    long long left = rq->clen; int bad = 0;
-    size_t first = rq->extra_len < (size_t)left ? rq->extra_len : (size_t)left;
-    if (first && write(fd, rq->extra, first) != (ssize_t)first) bad = 1;
-    left -= first;
-    static __thread char buf[65536];
-    while (left > 0 && !bad) {
-        ssize_t r = recv(c, buf, left < (long long)sizeof buf ? left : (long long)sizeof buf, 0);
-        if (r <= 0 || write(fd, buf, r) != r) bad = 1; else left -= r;
-    }
-    close(fd);
-    if (bad) { unlink(tmp); jerr(c, 500, "envio interrompido (disco cheio ou conexão perdida)"); return; }
+    if (body_to_file(c, rq, tmp)) { jerr(c, 500, "envio interrompido (disco cheio ou conexão perdida)"); return; }
     rename(tmp, fin);
     const char *base = strrchr(name, '/'); base = base ? base + 1 : name;
     pthread_mutex_lock(&gmx);
@@ -2139,19 +2181,546 @@ static void api_upload(int c, const Req *rq, const char *me) {
     jok(c);
 }
 
+// devolve o final (até max bytes) de um arquivo de texto; vazio se não existir
+static void tail_reply(int c, const char *p, off_t max) {
+    int fd = open(p, O_RDONLY | O_CLOEXEC | O_NOFOLLOW);
+    if (fd < 0) { reply(c, 200, "text/plain; charset=utf-8", "", 0, NULL); return; }
+    off_t sz = lseek(fd, 0, SEEK_END), off = sz > max ? sz - max : 0;
+    char *buf = malloc(max + 1);
+    ssize_t n = pread(fd, buf, max, off);
+    close(fd);
+    reply(c, 200, "text/plain; charset=utf-8", buf, n > 0 ? n : 0, NULL);
+    free(buf);
+}
 static void api_log(int c, const Req *rq, const char *me) {
     App cp; if (!app_get(c, rq, me, &cp)) return;
     char which[12], p[PATH_MAX]; fget(rq->query, "which", which, sizeof which);
     const char *f = !strcmp(which, "run") ? "run.log" : !strcmp(which, "hist") ? "history.tsv" : "deploy.log";
     dpath(p, sizeof p, "apps/%s/%s", cp.id, f);
-    int fd = open(p, O_RDONLY | O_CLOEXEC);
-    if (fd < 0) { reply(c, 200, "text/plain; charset=utf-8", "", 0, NULL); return; }
-    off_t sz = lseek(fd, 0, SEEK_END), off = sz > 40000 ? sz - 40000 : 0;
-    char *buf = malloc(40001);
-    ssize_t n = pread(fd, buf, 40000, off);
+    tail_reply(c, p, 40000);
+}
+
+/* ---------- histórico de deploys (todas as aplicações do usuário, mais recentes primeiro) ---------- */
+typedef struct { long long ts; long secs; char app[32], sha[8], trig[12], res[8], msg[160]; } Dep;
+static int cmp_dep(const void *a, const void *b) { long long x = ((const Dep *)a)->ts, y = ((const Dep *)b)->ts; return x < y ? 1 : x > y ? -1 : 0; }
+// GET /api/deploys?app=<id|vazio>&limit=N  ->  {"building":[...],"deploys":[...]}
+static void api_deploys(int c, const Req *rq, const char *me) {
+    char want[32], lim[8]; fget(rq->query, "app", want, sizeof want); fget(rq->query, "limit", lim, sizeof lim);
+    int limit = atoi(lim); if (limit < 1 || limit > 300) limit = 100;
+    static const int PER_APP = 150;
+    struct { char id[32], name[64]; time_t since; int building; } vis[MAXAPP]; int nv = 0;
+    pthread_mutex_lock(&gmx);
+    for (int i = 0; i < MAXAPP; i++) {
+        App *a = &apps[i];
+        if (!a->used || !can(me, a->owner) || (want[0] && strcmp(want, a->id))) continue;
+        snprintf(vis[nv].id, 32, "%s", a->id); snprintf(vis[nv].name, 64, "%s", a->name); vis[nv].building = a->deploying; vis[nv].since = a->dstart; nv++;
+    }
+    pthread_mutex_unlock(&gmx);
+    Dep *all = malloc(sizeof(Dep) * PER_APP * (nv ? nv : 1)); size_t na = 0;
+    for (int i = 0; i < nv; i++) {
+        char p[PATH_MAX]; dpath(p, sizeof p, "apps/%s/history.tsv", vis[i].id);
+        FILE *f = fopen(p, "r"); if (!f) continue;
+        fseek(f, 0, SEEK_END); long sz = ftell(f); fseek(f, sz > 65536 ? sz - 65536 : 0, SEEK_SET); // só o final: as linhas mais novas
+        char l[600]; Dep ring[150]; int rn = 0;
+        if (sz > 65536 && !fgets(l, sizeof l, f)) { fclose(f); continue; } // primeira linha pode estar cortada: descarta
+        while (fgets(l, sizeof l, f)) {
+            char *fld[6]; int k = 0; l[strcspn(l, "\r\n")] = 0;
+            for (char *t = l; k < 6; ) { fld[k++] = t; char *tb = strchr(t, '\t'); if (!tb) break; *tb = 0; t = tb + 1; }
+            if (k < 6) continue;
+            Dep *d = &ring[rn++ % PER_APP];
+            d->ts = atoll(fld[0]); snprintf(d->sha, sizeof d->sha, "%s", fld[1]); snprintf(d->trig, sizeof d->trig, "%s", fld[2]); snprintf(d->res, sizeof d->res, "%s", fld[3]);
+            snprintf(d->msg, sizeof d->msg, "%s", fld[4]); d->secs = atol(fld[5]); snprintf(d->app, sizeof d->app, "%s", vis[i].id);
+        }
+        fclose(f);
+        for (int k = 0; k < rn && k < PER_APP; k++) all[na++] = ring[k];
+    }
+    qsort(all, na, sizeof(Dep), cmp_dep);
+    sb b = {0}; SBS(&b, "{\"building\":["); int first = 1;
+    for (int i = 0; i < nv; i++) if (vis[i].building) {
+        sb_add(&b, first ? "{\"app\":" : ",{\"app\":", first ? 7 : 8); first = 0; sb_str(&b, vis[i].id);
+        sb_add(&b, ",\"name\":", 8); sb_str(&b, vis[i].name); sb_f(&b, ",\"since\":%lld}", (long long)vis[i].since);
+    }
+    SBS(&b, "],\"deploys\":[");
+    for (size_t i = 0; i < na && i < (size_t)limit; i++) {
+        Dep *d = &all[i]; const char *nm = d->app; char lp[PATH_MAX];
+        for (int k = 0; k < nv; k++) if (!strcmp(vis[k].id, d->app)) nm = vis[k].name;
+        dpath(lp, sizeof lp, "apps/%s/deploys/%lld.log", d->app, d->ts);
+        sb_add(&b, i ? ",{\"app\":" : "{\"app\":", i ? 8 : 7); sb_str(&b, d->app);
+        sb_add(&b, ",\"name\":", 8); sb_str(&b, nm); sb_add(&b, ",\"sha\":", 7); sb_str(&b, d->sha); sb_add(&b, ",\"trig\":", 8); sb_str(&b, d->trig);
+        sb_add(&b, ",\"res\":", 7); sb_str(&b, d->res); sb_add(&b, ",\"msg\":", 7); sb_str(&b, d->msg);
+        sb_f(&b, ",\"ts\":%lld,\"secs\":%ld,\"log\":%d}", d->ts, d->secs, !access(lp, R_OK));
+    }
+    sb_add(&b, "]}", 2);
+    free(all);
+    reply(c, 200, "application/json", b.p, b.n, NULL);
+    free(b.p);
+}
+// GET /api/deploy/log?id=&ts=  -> o log daquele deploy (guardado desde que o histórico passou a arquivar; os mais antigos não têm)
+static void api_deploy_log(int c, const Req *rq, const char *me) {
+    App cp; if (!app_get(c, rq, me, &cp)) return;
+    char ts[16], p[PATH_MAX]; fget(rq->query, "ts", ts, sizeof ts);
+    if (!ts[0] || strspn(ts, "0123456789") != strlen(ts)) { jerr(c, 400, "deploy inválido"); return; }
+    dpath(p, sizeof p, "apps/%s/deploys/%s.log", cp.id, ts);
+    if (!reg_file(p)) { jerr(c, 404, "O log deste deploy não foi guardado (só os últimos 30 de cada aplicação ficam salvos)."); return; }
+    tail_reply(c, p, 200000);
+}
+
+/* ---------- explorador de bancos: roda SQL como o PRÓPRIO usuário do banco (nunca como o administrador) ----------
+   O usuário h_<nome> só enxerga o banco dele, então navegar e consultar no painel não dá acesso ao resto do servidor de banco.
+   Cuidado com meta-comandos: `psql -c '\! cmd'` e o `\!`/`system` do cliente do MySQL executam shell. No psql o SQL vai por -c com um
+   espaço na frente (assim nunca começa com "\"); no MySQL o console livre só vale para quem já pode rodar comandos no servidor. */
+#define SQL_MAX 20000
+#define GRID_ROWS 1000 // linhas devolvidas por consulta (o resto vira "truncated")
+static int db_user_run(const Db *d, const char *sql, int ro, sb *out) {
+    int pg = !strcmp(d->engine, "postgres");
+    char *env[210], e1[80], e2[120], *av[24], *q = NULL, *in = NULL; int ne = 0, n = 0;
+    RunOpt o = {.fd = -1, .out = out, .to = 30};
+    if (pg) {
+        snprintf(e1, sizeof e1, "PGPASSWORD=%s", d->pw);
+        snprintf(e2, sizeof e2, "PGOPTIONS=-c statement_timeout=20000%s", ro ? " -c default_transaction_read_only=on" : "");
+        env[ne++] = e1; env[ne++] = e2; env[ne++] = "PGCONNECT_TIMEOUT=5";
+        q = malloc(strlen(sql) + 2); q[0] = ' '; strcpy(q + 1, sql); // o espaço é a guarda contra "\!"
+        char *a[] = {"psql", "-X", "-h", "127.0.0.1", "-U", (char *)d->user, "-d", (char *)d->user, "--csv", "-P", "null=\001", "-v", "ON_ERROR_STOP=1", "-c", q, NULL};
+        for (int i = 0; a[i]; i++) av[n++] = a[i];
+    } else {
+        snprintf(e1, sizeof e1, "MYSQL_PWD=%s", d->pw);
+        env[ne++] = e1;
+        size_t l = strlen(sql) + 160; in = malloc(l);
+        snprintf(in, l, "SET SESSION max_statement_time=20;\n%s%s\n", ro ? "SET SESSION TRANSACTION READ ONLY;\n" : "", sql);
+        o.in = in;
+        char *a[] = {tools.mybin, "-h", "127.0.0.1", "-P", "3306", "-u", (char *)d->user, "-D", (char *)d->user, "--batch", NULL};
+        for (int i = 0; a[i]; i++) av[n++] = a[i];
+    }
+    av[n] = NULL;
+    for (char **e = environ; *e && ne < 205; e++) env[ne++] = *e;
+    env[ne] = NULL; o.env = env;
+    int rc = run(av, &o);
+    free(q); free(in);
+    return rc;
+}
+
+// quantos comandos há no texto (ignora ; dentro de aspas, comentários e $$...$$ do PostgreSQL)
+static int sql_count(const char *s, int pg) {
+    int n = 0, has = 0;
+    while (*s) {
+        char ch = *s;
+        if (ch == '\'' || ch == '"' || (!pg && ch == '`')) {
+            has = 1; s++;
+            while (*s) {
+                if (*s == ch) { if (s[1] == ch) { s += 2; continue; } break; }
+                if (!pg && *s == '\\' && s[1]) s++;
+                s++;
+            }
+            if (*s) s++;
+        } else if ((ch == '-' && s[1] == '-') || (!pg && ch == '#')) { while (*s && *s != '\n') s++; }
+        else if (ch == '/' && s[1] == '*') { s += 2; while (*s && !(*s == '*' && s[1] == '/')) s++; if (*s) s += 2; }
+        else if (pg && ch == '$') {
+            size_t tl = 1; while (isalnum((unsigned char)s[tl]) || s[tl] == '_') tl++;
+            if (s[tl] == '$') { // $tag$ ... $tag$
+                char tag[64]; size_t k = tl + 1 < sizeof tag ? tl + 1 : sizeof tag - 1; memcpy(tag, s, k); tag[k] = 0;
+                const char *e = strstr(s + k, tag); has = 1;
+                s = e ? e + k : s + strlen(s);
+            } else { has = 1; s++; }
+        } else if (ch == ';') { if (has) n++; has = 0; s++; }
+        else { if (!isspace((unsigned char)ch)) has = 1; s++; }
+    }
+    return n + has;
+}
+
+// saída do cliente (CSV do psql ou TSV do mariadb --batch) -> "columns":[...],"rows":[[...]]; NULL vira null
+static void cell_json(sb *o, const char *v, size_t n, int csv, int esc) {
+    if ((csv && n == 1 && v[0] == '\001') || (!csv && !esc && n == 4 && !memcmp(v, "NULL", 4))) { sb_add(o, "null", 4); return; }
+    int cut = n > 4000;
+    if (cut) { n = 4000; while (n && ((unsigned char)v[n] & 0xC0) == 0x80) n--; } // não corta no meio de um caractere UTF-8
+    char *t = malloc(n + 4); memcpy(t, v, n); t[n] = 0;
+    if (cut) strcat(t, "…");
+    sb_str(o, t); free(t);
+}
+static int grid_parse(const char *raw, int csv, sb *cols, sb *rows, int *trunc) { // devolve nº de linhas de dados
+    size_t len = strlen(raw); int bytecap = len >= (1 << 18) - 4096, row = 0, col = 0, inq = 0, quoted = 0, esc = 0, nrows = 0;
+    sb cell = {0}, rj = {0};
+    for (const char *p = raw;; ) {
+        int eof = !*p, eol = !eof && !inq && (*p == '\n' || (*p == '\r' && p[1] == '\n')), sep = !eof && !inq && *p == (csv ? ',' : '\t');
+        if (eof || eol || sep) {
+            if (eof && !cell.n && !col && !quoted) break; // fim limpo
+            if (eof && bytecap) break; // última linha cortada pelo limite de saída: descarta
+            const char *v = cell.p ? cell.p : "";
+            if (!row) { if (col) sb_add(cols, ",", 1); sb_str(cols, v); }
+            else { if (col) sb_add(&rj, ",", 1); cell_json(&rj, v, cell.n, csv, esc); }
+            cell.n = 0; if (cell.p) cell.p[0] = 0; quoted = esc = 0; col++;
+            if (sep) { p++; continue; }
+            if (row) {
+                if (nrows >= GRID_ROWS) { *trunc = 1; break; }
+                sb_add(rows, nrows ? ",[" : "[", nrows ? 2 : 1); sb_add(rows, rj.p ? rj.p : "", rj.n); sb_add(rows, "]", 1); nrows++;
+            }
+            rj.n = 0; if (rj.p) rj.p[0] = 0; row++; col = 0;
+            if (eof) break;
+            p += *p == '\r' ? 2 : 1; continue;
+        }
+        if (csv) {
+            if (inq) { if (*p == '"') { if (p[1] == '"') { sb_add(&cell, "\"", 1); p += 2; continue; } inq = 0; p++; continue; } }
+            else if (*p == '"' && !cell.n && !quoted) { inq = quoted = 1; p++; continue; }
+            sb_add(&cell, p, 1); p++;
+        } else if (*p == '\\' && p[1]) {
+            char r = p[1] == 'n' ? '\n' : p[1] == 't' ? '\t' : p[1] == '0' ? ' ' : p[1];
+            sb_add(&cell, &r, 1); esc = 1; p += 2;
+        } else { sb_add(&cell, p, 1); p++; }
+    }
+    if (bytecap) *trunc = 1;
+    free(cell.p); free(rj.p);
+    return nrows;
+}
+static int pg_tag(const char *l) { // "UPDATE 3", "INSERT 0 2", "CREATE TABLE": etiqueta de comando do psql (no CSV vem sem cabeçalho)
+    static const char *w[] = {"INSERT", "UPDATE", "DELETE", "MERGE", "CREATE", "ALTER", "DROP", "TRUNCATE", "GRANT", "REVOKE", "COMMENT", "COPY", "SET", "BEGIN", "COMMIT", "ROLLBACK", "VACUUM", "ANALYZE", "REINDEX", "REFRESH", "CALL", "DO", "LOCK", "SAVEPOINT", "RELEASE", "RESET", "CLUSTER", "SELECT", NULL};
+    for (const char *s = l; *s; s++) if (!isupper((unsigned char)*s) && !isdigit((unsigned char)*s) && *s != ' ') return 0;
+    for (int i = 0; w[i]; i++) { size_t k = strlen(w[i]); if (!strncmp(l, w[i], k) && (!l[k] || l[k] == ' ')) return 1; }
+    return 0;
+}
+// monta {"columns":..,"rows":..,"truncated":..,"msg":..} a partir da saída bruta
+static void grid_reply(int c, char *raw, int pg, const char *extra, long ms) {
+    char msg[80] = ""; int trunc = 0;
+    size_t n = strlen(raw); while (n && (raw[n-1] == '\n' || raw[n-1] == '\r')) raw[--n] = 0;
+    if (pg) { char *nl = strrchr(raw, '\n'), *last = nl ? nl + 1 : raw; if (pg_tag(last)) { snprintf(msg, sizeof msg, "%s", last); if (nl) *nl = 0; else raw[0] = 0; } }
+    sb cols = {0}, rows = {0}, o = {0};
+    int nr = grid_parse(raw, pg, &cols, &rows, &trunc);
+    sb_add(&o, "{\"columns\":[", 12); sb_add(&o, cols.p ? cols.p : "", cols.n);
+    sb_add(&o, "],\"rows\":[", 10); sb_add(&o, rows.p ? rows.p : "", rows.n);
+    sb_f(&o, "],\"count\":%d,\"truncated\":%d,\"ms\":%ld,\"msg\":", nr, trunc, ms); sb_str(&o, msg);
+    if (extra) sb_add(&o, extra, strlen(extra));
+    sb_add(&o, "}", 1);
+    reply(c, 200, "application/json", o.p, o.n, NULL);
+    free(cols.p); free(rows.p); free(o.p);
+}
+static long now_ms(void) { struct timespec t; clock_gettime(CLOCK_MONOTONIC, &t); return t.tv_sec * 1000L + t.tv_nsec / 1000000L; }
+static void sql_err(int c, int rc, sb *o) { // o cliente mistura stderr no out: é a mensagem do banco
+    char m[400]; snprintf(m, sizeof m, "%s", rc == -2 ? "A consulta passou do tempo limite." : o->p && o->p[0] ? o->p : "O banco não respondeu.");
+    for (char *s = m; *s; s++) if (*s == '\r') *s = ' ';
+    trim(m); jerr(c, 400, m);
+}
+static int db_get(int c, const Req *rq, const char *me, Db *out, const char *id) { // acha o banco (visível a `me`) e confere se o servidor está de pé
+    pthread_mutex_lock(&gmx);
+    Db *d = db_find(id); int ok = d && can(me, d->owner);
+    if (ok) *out = *d;
+    pthread_mutex_unlock(&gmx);
+    (void)rq;
+    if (!ok) { jerr(c, 404, "banco não encontrado"); return 0; }
+    if (!db_up(out->engine)) { jerr(c, 503, "O servidor desse banco não está rodando."); return 0; }
+    return 1;
+}
+static void qident(sb *o, int pg, const char *id) { // identificador entre aspas (dobra a aspa): vale para qualquer nome
+    char q = pg ? '"' : '`'; sb_add(o, &q, 1);
+    for (; *id; id++) { sb_add(o, id, 1); if (*id == q) sb_add(o, &q, 1); }
+    sb_add(o, &q, 1);
+}
+static int ident_ok(const char *s) { size_t n = strlen(s); if (!n || n > 120) return 0; for (; *s; s++) if ((unsigned char)*s < 0x20 || *s == 0x7f || *s == '\\') return 0; return 1; }
+
+// GET /api/db/view?id=&what=tables|cols|rows&s=<schema>&t=<tabela>&page=&sort=&dir=
+#define PAGE_ROWS 50
+static void api_db_view(int c, const Req *rq, const char *me) {
+    char id[40], what[8], sch[130], tab[130], pg_[12], sort[130], dir[8];
+    fget(rq->query, "id", id, sizeof id); fget(rq->query, "what", what, sizeof what); fget(rq->query, "s", sch, sizeof sch); fget(rq->query, "t", tab, sizeof tab);
+    fget(rq->query, "page", pg_, sizeof pg_); fget(rq->query, "sort", sort, sizeof sort); fget(rq->query, "dir", dir, sizeof dir);
+    Db d; if (!db_get(c, rq, me, &d, id)) return;
+    int pg = !strcmp(d.engine, "postgres"); sb q = {0}, o = {0}; long t0 = now_ms(); int rc;
+    if (!strcmp(what, "tables")) {
+        const char *sql = pg ? "SELECT n.nspname AS schema, c.relname AS name, CASE WHEN c.relkind IN ('v','m') THEN 'view' ELSE 'table' END AS kind, c.reltuples::bigint AS est, pg_total_relation_size(c.oid) AS bytes FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE c.relkind IN ('r','p','v','m') AND n.nspname NOT IN ('pg_catalog','information_schema') AND n.nspname NOT LIKE 'pg_toast%' ORDER BY 1, 2"
+                              : "SELECT '' AS `schema`, TABLE_NAME AS name, IF(TABLE_TYPE = 'VIEW', 'view', 'table') AS kind, IFNULL(TABLE_ROWS, 0) AS est, IFNULL(DATA_LENGTH + INDEX_LENGTH, 0) AS bytes FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() ORDER BY 2";
+        rc = db_user_run(&d, sql, 1, &o);
+        if (rc) { sql_err(c, rc, &o); free(o.p); return; }
+        grid_reply(c, o.p ? o.p : (char *)"", pg, NULL, now_ms() - t0); free(o.p); return;
+    }
+    if (!ident_ok(tab) || (sch[0] && !ident_ok(sch))) { jerr(c, 400, "tabela inválida"); return; }
+    sb from = {0};
+    if (pg) { qident(&from, 1, sch[0] ? sch : "public"); sb_add(&from, ".", 1); }
+    qident(&from, pg, tab);
+    if (!strcmp(what, "cols")) {
+        if (pg) {
+            char *lit = malloc(from.n * 2 + 1), *w = lit; for (const char *s = from.p; *s; s++) { if (*s == '\'') *w++ = '\''; *w++ = *s; } *w = 0; // literal 'schema.tabela'
+            sb_f(&q, "SELECT a.attname AS column, format_type(a.atttypid, a.atttypmod) AS type, CASE WHEN a.attnotnull THEN 'NOT NULL' ELSE '' END AS \"null\", pg_get_expr(d.adbin, d.adrelid) AS \"default\", CASE WHEN EXISTS (SELECT 1 FROM pg_index i WHERE i.indrelid = a.attrelid AND i.indisprimary AND a.attnum = ANY (i.indkey)) THEN 'PK' ELSE '' END AS key FROM pg_attribute a LEFT JOIN pg_attrdef d ON d.adrelid = a.attrelid AND d.adnum = a.attnum WHERE a.attrelid = '%s'::regclass AND a.attnum > 0 AND NOT a.attisdropped ORDER BY a.attnum", lit);
+            free(lit);
+        } else sb_f(&q, "SHOW COLUMNS FROM %s", from.p);
+        rc = db_user_run(&d, q.p, 1, &o);
+        free(q.p); free(from.p);
+        if (rc) { sql_err(c, rc, &o); free(o.p); return; }
+        grid_reply(c, o.p ? o.p : (char *)"", pg, NULL, now_ms() - t0); free(o.p); return;
+    }
+    // rows
+    int page = atoi(pg_); if (page < 0 || page > 1000000) page = 0;
+    sb_f(&q, "SELECT * FROM %s", from.p);
+    if (sort[0] && ident_ok(sort)) { sb_add(&q, " ORDER BY ", 10); qident(&q, pg, sort); sb_add(&q, !strcmp(dir, "desc") ? " DESC" : " ASC", 5); }
+    sb_f(&q, " LIMIT %d OFFSET %lld", PAGE_ROWS, (long long)page * PAGE_ROWS);
+    rc = db_user_run(&d, q.p, 1, &o);
+    if (rc) { sql_err(c, rc, &o); free(o.p); free(q.p); free(from.p); return; }
+    sb cnt = {0}; long long total = -1; char *np;
+    char cs[600]; snprintf(cs, sizeof cs, "SELECT count(*) FROM %.*s", (int)(from.n < 500 ? from.n : 500), from.p);
+    if (!db_user_run(&d, cs, 1, &cnt) && cnt.p && (np = strchr(cnt.p, '\n'))) total = atoll(np + 1);
+    char ex[80]; snprintf(ex, sizeof ex, ",\"total\":%lld,\"page\":%d,\"size\":%d", total, page, PAGE_ROWS);
+    grid_reply(c, o.p ? o.p : (char *)"", pg, ex, now_ms() - t0);
+    free(o.p); free(q.p); free(from.p); free(cnt.p);
+}
+
+// POST /api/db/sql  id, sql, ro=1|0  ->  resultado da consulta (um comando por vez)
+static void api_db_sql(int c, const Req *rq, const char *me) {
+    char *f = read_body(c, rq, 3 * SQL_MAX + 400); // o SQL vem codificado em %XX: pode chegar a 3x o tamanho
+    if (!f) { jerr(c, 400, "pedido inválido ou grande demais"); return; }
+    char id[40], ro[4]; char *sql = malloc(SQL_MAX + 1);
+    fget(f, "id", id, sizeof id); fget(f, "ro", ro, sizeof ro); fget(f, "sql", sql, SQL_MAX + 1);
+    free(f);
+    Db d; int ok = db_get(c, rq, me, &d, id);
+    if (ok) {
+        int pg = !strcmp(d.engine, "postgres"), n = sql_count(sql, pg);
+        if (!pg && !native_ok(me)) jerr(c, 403, "O console do MySQL só roda para quem pode executar comandos no servidor (o cliente aceita \\! e system). Use as abas Dados e Estrutura.");
+        else if (n == 0) jerr(c, 400, "Digite um comando SQL.");
+        else if (n > 1) jerr(c, 400, "Execute um comando por vez.");
+        else {
+            sb o = {0}; long t0 = now_ms();
+            int rc = db_user_run(&d, sql, strcmp(ro, "0") != 0, &o);
+            if (rc) sql_err(c, rc, &o); else grid_reply(c, o.p ? o.p : (char *)"", pg, NULL, now_ms() - t0);
+            free(o.p);
+        }
+    }
+    free(sql);
+}
+
+/* ---------- buckets: pastas de arquivos (imagens, anexos...) com navegador no painel ----------
+   Arquivos em data/buckets/<id>/ ; configuração em data/buckets/<id>.conf. Os apps não alcançam data/ (sandbox): o acesso é pelo painel,
+   por token de API (Authorization: Bearer) ou, se o bucket for "público", por GET /b/<id>/<caminho> (só rede local; nunca pelo túnel). */
+#define BK_MAX (2LL << 30) // por arquivo
+#define BK_KEY 300         // caminho dentro do bucket (a query aceita ~2 KB, mesmo com %XX)
+static Bucket *bk_find(const char *id) {
+    for (int i = 0; i < MAXBK; i++) if (bks[i].used && !strcmp(bks[i].id, id)) return &bks[i];
+    return NULL;
+}
+static void bk_save(const Bucket *b) {
+    char p[PATH_MAX], t[400]; dpath(p, sizeof p, "buckets/%s.conf", b->id);
+    snprintf(t, sizeof t, "name=%s\nowner=%s\npublic=%d\ncreated=%lld\n", b->name, b->owner, b->pub, (long long)b->created);
+    int fd = open(p, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0600);
+    if (fd >= 0) { if (write(fd, t, strlen(t)) < 0) {} close(fd); }
+}
+static __thread long long scan_b, scan_n;
+static int scan_cb(const char *p, const struct stat *s, int t, struct FTW *f) { (void)p; (void)f; if (t == FTW_F) { scan_b += s->st_size; scan_n++; } return 0; }
+static void bk_rescan(const char *id) { // soma tamanho e nº de arquivos (fora do cadeado) e guarda no bucket
+    char p[PATH_MAX]; dpath(p, sizeof p, "buckets/%s", id);
+    scan_b = scan_n = 0; nftw(p, scan_cb, 16, FTW_PHYS);
+    pthread_mutex_lock(&gmx); Bucket *b = bk_find(id); if (b) { b->bytes = scan_b; b->files = scan_n; } pthread_mutex_unlock(&gmx);
+}
+static void bk_load_all(void) {
+    char dir[PATH_MAX], p[PATH_MAX], l[256]; dpath(dir, sizeof dir, "buckets"); mkdirp(dir);
+    DIR *d = opendir(dir); if (!d) return;
+    struct dirent *de; int n = 0;
+    while ((de = readdir(d)) && n < MAXBK) {
+        char *dot = strstr(de->d_name, ".conf");
+        if (!dot || dot[5] || dot == de->d_name) continue;
+        Bucket *x = &bks[n]; memset(x, 0, sizeof *x);
+        snprintf(x->id, sizeof x->id, "%.*s", (int)(dot - de->d_name), de->d_name);
+        snprintf(p, sizeof p, "%s/%s", dir, de->d_name);
+        FILE *f = fopen(p, "r"); if (!f) continue;
+        long long v;
+        while (fgets(l, sizeof l, f)) {
+            l[strcspn(l, "\r\n")] = 0;
+            if (kvs(l, "name", x->name, sizeof x->name) || kvs(l, "owner", x->owner, sizeof x->owner)) continue;
+            if (kvn(l, "public", &v)) x->pub = v != 0; else if (kvn(l, "created", &v)) x->created = v;
+        }
+        fclose(f);
+        x->used = x->owner[0] != 0; n += x->used;
+    }
+    closedir(d);
+    for (int i = 0; i < MAXBK; i++) if (bks[i].used) bk_rescan(bks[i].id);
+}
+// caminho relativo válido: sem "..", sem "." , sem segmento vazio, sem controle ou "\"; barra final já foi tirada
+static int bk_key_ok(const char *k) {
+    if (!*k || strlen(k) > BK_KEY || k[0] == '/') return 0;
+    for (const char *s = k;;) {
+        size_t l = strcspn(s, "/");
+        if (!l || l > 255 || (l == 1 && s[0] == '.') || (l == 2 && s[0] == '.' && s[1] == '.')) return 0;
+        for (size_t i = 0; i < l; i++) if ((unsigned char)s[i] < 0x20 || s[i] == 0x7f || s[i] == '\\') return 0;
+        s += l; if (!*s) return 1;
+        s++;
+    }
+}
+static void bk_norm(char *k) { size_t n = strlen(k); while (n && k[n-1] == '/') k[--n] = 0; }
+static void bk_path(char *o, size_t cap, const char *id, const char *key) { if (key[0]) dpath(o, cap, "buckets/%s/%s", id, key); else dpath(o, cap, "buckets/%s", id); }
+static int bk_get(int c, const char *me, const char *id, Bucket *out) {
+    pthread_mutex_lock(&gmx);
+    Bucket *b = bk_find(id); int ok = b && can(me, b->owner);
+    if (ok) *out = *b;
+    pthread_mutex_unlock(&gmx);
+    if (!ok) jerr(c, 404, "bucket não encontrado");
+    return ok;
+}
+// o caminho (que precisa existir) resolve, depois de seguir links simbólicos, para dentro da pasta do bucket? Barra pasta-link para fora.
+static int bk_inside(const char *id, const char *path) {
+    char root[PATH_MAX], rr[PATH_MAX], rp[PATH_MAX]; bk_path(root, sizeof root, id, "");
+    if (!realpath(root, rr) || !realpath(path, rp)) return 0;
+    size_t n = strlen(rr);
+    return !strncmp(rp, rr, n) && (rp[n] == '/' || !rp[n]);
+}
+static int bk_parent_inside(const char *id, const char *path) { char t[PATH_MAX]; snprintf(t, sizeof t, "%s", path); char *q = strrchr(t, '/'); if (!q) return 0; *q = 0; return bk_inside(id, t); }
+static void bk_parent(const char *path) { char t[PATH_MAX]; snprintf(t, sizeof t, "%s", path); char *s = strrchr(t, '/'); if (s) { *s = 0; mkdirp(t); } }
+
+static const char *bk_mime(const char *name, int *inl, int *sbx) { // inl: o navegador pode abrir direto; sbx: precisa de CSP sandbox (SVG pode ter script)
+    static const struct { const char *e, *m; int inl, sbx; } t[] = {
+        {".png", "image/png", 1, 0}, {".jpg", "image/jpeg", 1, 0}, {".jpeg", "image/jpeg", 1, 0}, {".gif", "image/gif", 1, 0}, {".webp", "image/webp", 1, 0},
+        {".avif", "image/avif", 1, 0}, {".bmp", "image/bmp", 1, 0}, {".ico", "image/x-icon", 1, 0}, {".svg", "image/svg+xml", 1, 1},
+        {".mp4", "video/mp4", 1, 0}, {".m4v", "video/mp4", 1, 0}, {".webm", "video/webm", 1, 0}, {".mov", "video/quicktime", 1, 0},
+        {".mp3", "audio/mpeg", 1, 0}, {".wav", "audio/wav", 1, 0}, {".ogg", "audio/ogg", 1, 0}, {".m4a", "audio/mp4", 1, 0}, {".flac", "audio/flac", 1, 0},
+        {".pdf", "application/pdf", 1, 0},
+        // texto abre como text/plain: HTML, JS e XML enviados nunca executam no navegador
+        {".txt", "text/plain; charset=utf-8", 1, 0}, {".md", "text/plain; charset=utf-8", 1, 0}, {".log", "text/plain; charset=utf-8", 1, 0}, {".csv", "text/plain; charset=utf-8", 1, 0},
+        {".json", "text/plain; charset=utf-8", 1, 0}, {".yaml", "text/plain; charset=utf-8", 1, 0}, {".yml", "text/plain; charset=utf-8", 1, 0}, {".xml", "text/plain; charset=utf-8", 1, 0},
+        {".html", "text/plain; charset=utf-8", 1, 0}, {".htm", "text/plain; charset=utf-8", 1, 0}, {".css", "text/plain; charset=utf-8", 1, 0}, {".js", "text/plain; charset=utf-8", 1, 0}, {NULL, NULL, 0, 0}};
+    const char *e = strrchr(name, '.');
+    for (int i = 0; e && t[i].e; i++) if (!strcasecmp(e, t[i].e)) { *inl = t[i].inl; *sbx = t[i].sbx; return t[i].m; }
+    *inl = *sbx = 0;
+    return "application/octet-stream";
+}
+// envia o arquivo (com Range, para vídeo e áudio andarem); dl=1 força download
+static void bk_send(int c, const Req *rq, const char *id, const char *key, int dl) {
+    char p[PATH_MAX];
+    if (!bk_key_ok(key)) { jerr(c, 404, "não encontrado"); return; }
+    bk_path(p, sizeof p, id, key);
+    int fd = open(p, O_RDONLY | O_CLOEXEC | O_NOFOLLOW); struct stat st;
+    if (fd < 0 || fstat(fd, &st) || !S_ISREG(st.st_mode) || !bk_inside(id, p)) { if (fd >= 0) close(fd); jerr(c, 404, "arquivo não encontrado"); return; }
+    const char *base = strrchr(key, '/'); base = base ? base + 1 : key;
+    int inl, sbx; const char *mt = bk_mime(base, &inl, &sbx);
+    long long size = st.st_size, a = 0, e = size - 1; int part = 0;
+    if (!strncmp(rq->range, "bytes=", 6) && !strchr(rq->range, ',')) {
+        const char *r = rq->range + 6, *dash = strchr(r, '-');
+        if (dash) {
+            if (*r == '-') { long long n = atoll(r + 1); a = size > n ? size - n : 0; }
+            else { a = atoll(r); if (dash[1]) e = atoll(dash + 1); }
+            if (e >= size) e = size - 1;
+            part = 1;
+            if (a > e || a < 0 || size == 0) { close(fd); char h[160]; int l = snprintf(h, sizeof h, "HTTP/1.1 416 Range Not Satisfiable\r\nContent-Range: bytes */%lld\r\nContent-Length: 0\r\nConnection: close\r\n\r\n", size); send_all(c, h, l); return; }
+        }
+    }
+    char nm[300], enc[900], cr[120] = "", h[2200]; size_t k = 0, ek = 0;
+    for (const char *q = base; *q && k < sizeof nm - 1; q++) { nm[k++] = isalnum((unsigned char)*q) || strchr("._- ", *q) ? *q : '_'; } // nome de reserva em ASCII
+    nm[k] = 0;
+    for (const unsigned char *q = (const unsigned char *)base; *q && ek < sizeof enc - 4; q++) { if (isalnum(*q) || strchr("._-", *q)) enc[ek++] = *q; else ek += snprintf(enc + ek, 4, "%%%02X", *q); }
+    enc[ek] = 0;
+    if (part) snprintf(cr, sizeof cr, "Content-Range: bytes %lld-%lld/%lld\r\n", a, e, size);
+    int l = snprintf(h, sizeof h, "HTTP/1.1 %s\r\nContent-Type: %s\r\nContent-Length: %lld\r\nAccept-Ranges: bytes\r\n%sContent-Disposition: %s; filename=\"%s\"; filename*=UTF-8''%s\r\nX-Content-Type-Options: nosniff\r\nCache-Control: private, no-cache\r\nReferrer-Policy: no-referrer\r\n%sConnection: close\r\n\r\n",
+                     part ? "206 Partial Content" : "200 OK", mt, e - a + 1, cr, inl && !dl ? "inline" : "attachment", nm, enc, sbx || !inl ? "Content-Security-Policy: sandbox\r\n" : "");
+    if (!send_all(c, h, l)) { off_t off = a; long long left = e - a + 1; while (left > 0) { ssize_t r = sendfile(c, fd, &off, left); if (r <= 0) break; left -= r; } }
     close(fd);
-    reply(c, 200, "text/plain; charset=utf-8", buf, n > 0 ? n : 0, NULL);
-    free(buf);
+}
+
+static void api_bk_list(int c, const Req *rq, const char *me) { // GET /api/bucket/list?id=&prefix=
+    char id[40], pre[BK_KEY + 8], p[PATH_MAX]; fget(rq->query, "id", id, sizeof id); fget(rq->query, "prefix", pre, sizeof pre); bk_norm(pre);
+    Bucket b; if (!bk_get(c, me, id, &b)) return;
+    if (pre[0] && !bk_key_ok(pre)) { jerr(c, 400, "pasta inválida"); return; }
+    bk_path(p, sizeof p, b.id, pre);
+    DIR *d = opendir(p);
+    if (!d) { if (pre[0]) { jerr(c, 404, "pasta não encontrada"); return; } mkdirp(p); d = opendir(p); }
+    if (d && !bk_inside(b.id, p)) { closedir(d); jerr(c, 404, "pasta não encontrada"); return; }
+    sb o = {0}; sb_add(&o, "{\"path\":", 8); sb_str(&o, pre); sb_add(&o, ",\"entries\":[", 12);
+    struct dirent *de; int n = 0;
+    while (d && (de = readdir(d)) && n < 5000) {
+        struct stat st;
+        if (!strcmp(de->d_name, ".") || !strcmp(de->d_name, "..") || fstatat(dirfd(d), de->d_name, &st, AT_SYMLINK_NOFOLLOW)) continue;
+        int dir = S_ISDIR(st.st_mode); if (!dir && !S_ISREG(st.st_mode)) continue;
+        sb_add(&o, n ? ",{\"name\":" : "{\"name\":", n ? 9 : 8); sb_str(&o, de->d_name);
+        sb_f(&o, ",\"dir\":%d,\"size\":%lld,\"mtime\":%lld}", dir, dir ? 0LL : (long long)st.st_size, (long long)st.st_mtime); n++;
+    }
+    if (d) closedir(d);
+    sb_add(&o, "]}", 2);
+    reply(c, 200, "application/json", o.p, o.n, NULL); free(o.p);
+}
+static void api_bk_file(int c, const Req *rq, const char *me) { // GET /api/bucket/file?id=&key=&dl=1
+    char id[40], key[BK_KEY + 8], dl[4]; fget(rq->query, "id", id, sizeof id); fget(rq->query, "key", key, sizeof key); fget(rq->query, "dl", dl, sizeof dl);
+    Bucket b; if (!bk_get(c, me, id, &b)) return;
+    bk_send(c, rq, b.id, key, dl[0] == '1');
+}
+static void bk_public(int c, const Req *rq) { // GET /b/<id>/<caminho>: só se o bucket for público
+    char id[40]; const char *s = rq->path + 3, *sl = strchr(s, '/');
+    if (!sl || (size_t)(sl - s) >= sizeof id) { jerr(c, 404, "não encontrado"); return; }
+    snprintf(id, sizeof id, "%.*s", (int)(sl - s), s);
+    pthread_mutex_lock(&gmx); Bucket *b = bk_find(id); int ok = b && b->pub; pthread_mutex_unlock(&gmx);
+    if (!ok) { jerr(c, 404, "não encontrado"); return; }
+    char key[BK_KEY + 8]; snprintf(key, sizeof key, "%s", sl + 1); bk_norm(key);
+    bk_send(c, rq, id, key, 0);
+}
+static void api_bk_create(int c, const Req *rq, const char *me) { // POST name, scope, pub
+    char *f = read_body(c, rq, 2048);
+    if (!f) { jerr(c, 400, "pedido inválido"); return; }
+    char name[64], scope[12], pub[4], id[40]; fget(f, "name", name, sizeof name); fget(f, "scope", scope, sizeof scope); fget(f, "pub", pub, sizeof pub);
+    free(f);
+    trim(name); clean1(name); slug(name, id, sizeof id, '-');
+    if (!id[0]) { jerr(c, 400, "Digite um nome para o bucket."); return; }
+    pthread_mutex_lock(&gmx);
+    if (bk_find(id)) { pthread_mutex_unlock(&gmx); jerr(c, 409, "Já existe um bucket com esse nome."); return; }
+    Bucket *b = NULL; for (int i = 0; i < MAXBK && !b; i++) if (!bks[i].used) b = &bks[i];
+    if (!b) { pthread_mutex_unlock(&gmx); jerr(c, 409, "Limite de buckets atingido."); return; }
+    memset(b, 0, sizeof *b);
+    snprintf(b->id, sizeof b->id, "%s", id); snprintf(b->name, sizeof b->name, "%s", name); snprintf(b->owner, sizeof b->owner, "%s", !strcmp(scope, "shared") ? "shared" : me);
+    b->pub = !strcmp(pub, "1"); b->created = time(NULL); b->used = 1;
+    char p[PATH_MAX]; bk_path(p, sizeof p, id, ""); mkdirp(p); bk_save(b);
+    pthread_mutex_unlock(&gmx);
+    jok(c);
+}
+static void api_bk_update(int c, const Req *rq, const char *me) { // POST id, pub
+    char *f = read_body(c, rq, 1024);
+    if (!f) { jerr(c, 400, "pedido inválido"); return; }
+    char id[40], pub[4]; fget(f, "id", id, sizeof id); fget(f, "pub", pub, sizeof pub);
+    free(f);
+    Bucket cp; if (!bk_get(c, me, id, &cp)) return;
+    pthread_mutex_lock(&gmx); Bucket *b = bk_find(id); if (b) { b->pub = !strcmp(pub, "1"); bk_save(b); } pthread_mutex_unlock(&gmx);
+    jok(c);
+}
+static void api_bk_delete(int c, const Req *rq, const char *me) { // POST id
+    char *f = read_body(c, rq, 1024);
+    if (!f) { jerr(c, 400, "pedido inválido"); return; }
+    char id[40]; fget(f, "id", id, sizeof id);
+    free(f);
+    Bucket cp; if (!bk_get(c, me, id, &cp)) return;
+    pthread_mutex_lock(&gmx); Bucket *b = bk_find(id); if (b) b->used = 0; pthread_mutex_unlock(&gmx);
+    char p[PATH_MAX]; bk_path(p, sizeof p, cp.id, ""); rm_rf(p);
+    dpath(p, sizeof p, "buckets/%s.conf", cp.id); unlink(p);
+    jok(c);
+}
+static void api_bk_upload(int c, const Req *rq, const char *me) { // POST /api/bucket/upload?id=&key=  corpo = o arquivo
+    char id[40], key[BK_KEY + 8], p[PATH_MAX], tmp[PATH_MAX + 40], r8[9]; fget(rq->query, "id", id, sizeof id); fget(rq->query, "key", key, sizeof key); bk_norm(key);
+    Bucket b; if (!bk_get(c, me, id, &b)) return;
+    if (!bk_key_ok(key)) { jerr(c, 400, "Nome de arquivo inválido (use até 300 caracteres, sem \"..\" nem \\)."); return; }
+    if (rq->clen < 0 || rq->clen > BK_MAX) { jerr(c, 413, "Arquivo maior que 2 GB."); return; }
+    struct statvfs sv; char dd[PATH_MAX]; dpath(dd, sizeof dd, "buckets");
+    if (!statvfs(dd, &sv) && (unsigned long long)sv.f_bavail * sv.f_frsize < (unsigned long long)rq->clen + (512ULL << 20)) { jerr(c, 413, "Sem espaço no servidor para este arquivo."); return; }
+    bk_path(p, sizeof p, b.id, key); bk_parent(p);
+    if (!bk_parent_inside(b.id, p)) { jerr(c, 400, "Caminho inválido."); return; }
+    rand_hex(r8, 4); dpath(tmp, sizeof tmp, "buckets/%s.up-%s", b.id, r8); // temporário fora da pasta do bucket: nunca aparece na lista
+    if (body_to_file(c, rq, tmp)) { jerr(c, 500, "envio interrompido (disco cheio ou conexão perdida)"); return; }
+    if (rename(tmp, p)) { unlink(tmp); jerr(c, 409, "Não deu para guardar: já existe uma pasta (ou um arquivo no caminho) com esse nome."); return; }
+    bk_rescan(b.id);
+    jok(c);
+}
+static void api_bk_ops(int c, const Req *rq, const char *me, const char *op) { // POST id, key[, to]: rm | mv | mkdir
+    char *f = read_body(c, rq, 4096);
+    if (!f) { jerr(c, 400, "pedido inválido"); return; }
+    char id[40], key[BK_KEY + 8], to[BK_KEY + 8], p[PATH_MAX], p2[PATH_MAX];
+    fget(f, "id", id, sizeof id); fget(f, "key", key, sizeof key); fget(f, "to", to, sizeof to);
+    free(f); bk_norm(key); bk_norm(to);
+    Bucket b; if (!bk_get(c, me, id, &b)) return;
+    if (!bk_key_ok(key)) { jerr(c, 400, "Nome inválido."); return; }
+    bk_path(p, sizeof p, b.id, key);
+    struct stat st; int have = !lstat(p, &st);
+    if (!strcmp(op, "mkdir")) {
+        if (have) { jerr(c, 409, "Já existe algo com esse nome."); return; }
+        bk_parent(p);
+        if (!bk_parent_inside(b.id, p)) { jerr(c, 400, "Caminho inválido."); return; }
+        if (mkdir(p, 0755)) { jerr(c, 409, "Não deu para criar a pasta (há um arquivo com esse nome no caminho?)."); return; }
+    } else if (!strcmp(op, "rm")) {
+        if (!have || !bk_parent_inside(b.id, p)) { jerr(c, 404, "não encontrado"); return; }
+        if (S_ISDIR(st.st_mode)) rm_rf(p); else unlink(p);
+        bk_rescan(b.id);
+    } else { // mv
+        if (!have) { jerr(c, 404, "não encontrado"); return; }
+        if (!bk_key_ok(to)) { jerr(c, 400, "Novo nome inválido."); return; }
+        bk_path(p2, sizeof p2, b.id, to); bk_parent(p2);
+        if (!bk_parent_inside(b.id, p) || !bk_parent_inside(b.id, p2)) { jerr(c, 400, "Caminho inválido."); return; }
+        if (renameat2(AT_FDCWD, p, AT_FDCWD, p2, RENAME_NOREPLACE)) { jerr(c, errno == EEXIST ? 409 : 400, errno == EEXIST ? "Já existe algo com esse nome." : "Não deu para mover para lá."); return; }
+    }
+    jok(c);
 }
 
 static void api_webhook_create(int c, const Req *rq, const char *me) { // cria o webhook no GitHub usando o token do app
@@ -2333,6 +2902,7 @@ static void route(int c, Req *rq) {
         return;
     }
     if (post && !strncmp(p, "/hook/", 6)) { api_hook(c, rq); return; }
+    if (!post && !strncmp(p, "/b/", 3)) { bk_public(c, rq); return; }
     if (strncmp(p, "/api/", 5)) { serve_static(c, rq); return; }
     const char *me = auth(rq);
     if (!me) { jerr(c, 401, "faça login no painel"); return; }
@@ -2341,6 +2911,11 @@ static void route(int c, Req *rq) {
     if (!strcmp(p, "/api/overview")) { overview(c, me); return; }
     if (!strcmp(p, "/api/stats")) { api_stats(c, rq, me); return; }
     if (!strcmp(p, "/api/app/log")) { api_log(c, rq, me); return; }
+    if (!strcmp(p, "/api/deploys")) { api_deploys(c, rq, me); return; }
+    if (!strcmp(p, "/api/deploy/log")) { api_deploy_log(c, rq, me); return; }
+    if (!strcmp(p, "/api/db/view")) { api_db_view(c, rq, me); return; }
+    if (!strcmp(p, "/api/bucket/list")) { api_bk_list(c, rq, me); return; }
+    if (!strcmp(p, "/api/bucket/file")) { api_bk_file(c, rq, me); return; }
     if (post && !strcmp(p, "/api/app/save")) { api_app_save(c, rq, me); return; }
     if (post && !strcmp(p, "/api/app/upload")) { api_upload(c, rq, me); return; }
     if (post && !strcmp(p, "/api/app/delete")) { api_app_delete(c, rq, me); return; }
@@ -2348,6 +2923,12 @@ static void route(int c, Req *rq) {
     if (post && !strncmp(p, "/api/app/", 9) && (!strcmp(p + 9, "deploy") || !strcmp(p + 9, "start") || !strcmp(p + 9, "stop") || !strcmp(p + 9, "restart"))) { api_app_action(c, rq, me, p + 9); return; }
     if (post && !strcmp(p, "/api/db/create")) { api_db_create(c, rq, me); return; }
     if (post && !strcmp(p, "/api/db/delete")) { api_db_delete(c, rq, me); return; }
+    if (post && !strcmp(p, "/api/db/sql")) { api_db_sql(c, rq, me); return; }
+    if (post && !strcmp(p, "/api/bucket/create")) { api_bk_create(c, rq, me); return; }
+    if (post && !strcmp(p, "/api/bucket/update")) { api_bk_update(c, rq, me); return; }
+    if (post && !strcmp(p, "/api/bucket/delete")) { api_bk_delete(c, rq, me); return; }
+    if (post && !strcmp(p, "/api/bucket/upload")) { api_bk_upload(c, rq, me); return; }
+    if (post && !strncmp(p, "/api/bucket/", 12) && (!strcmp(p + 12, "rm") || !strcmp(p + 12, "mv") || !strcmp(p + 12, "mkdir"))) { api_bk_ops(c, rq, me, p + 12); return; }
     if (post && !strcmp(p, "/api/domain/add")) { api_domain_add(c, rq, me); return; }
     if (post && !strcmp(p, "/api/domain/delete")) { api_domain_delete(c, rq, me); return; }
     if (post && !strcmp(p, "/api/settings")) { api_settings(c, rq, me); return; }
@@ -2373,20 +2954,23 @@ static void *conn_thread(void *arg) {
     Req rq = {0};
     rq.extra = he + 4; rq.extra_len = buf + len - (he + 4);
     *he = 0;
-    char target[1600];
-    if (sscanf(buf, "%7s %1599s", rq.method, target) != 2) goto done;
+    char target[2600];
+    if (sscanf(buf, "%7s %2599s", rq.method, target) != 2) goto done;
     char *qm = strchr(target, '?');
     if (qm) { *qm++ = 0; snprintf(rq.query, sizeof rq.query, "%s", qm); }
     udec(rq.path, target, strlen(target), sizeof rq.path);
+    int cl_seen = 0;
     for (char *l = strstr(buf, "\r\n"); l; l = strstr(l + 2, "\r\n")) {
         l += 2;
         const char *v;
 #define HDR(name, dst) if (!strncasecmp(l, name ":", sizeof name)) { v = l + sizeof name; while (*v == ' ') v++; snprintf(dst, sizeof dst, "%.*s", (int)strcspn(v, "\r\n"), v); }
-        HDR("cookie", rq.cookie) else HDR("x-requested-with", rq.xhr) else HDR("x-hub-signature-256", rq.sig) else HDR("x-github-event", rq.event) else HDR("authorization", rq.authz)
+        HDR("cookie", rq.cookie) else HDR("x-requested-with", rq.xhr) else HDR("x-hub-signature-256", rq.sig) else HDR("x-github-event", rq.event) else HDR("authorization", rq.authz) else HDR("range", rq.range)
         else if (!strncasecmp(l, "cf-connecting-ip:", 17) || !strncasecmp(l, "cf-ray:", 7)) rq.public = 1;
         else if (!cfg.behind_proxy && (!strncasecmp(l, "x-forwarded-for:", 16) || !strncasecmp(l, "forwarded:", 10) || !strncasecmp(l, "x-real-ip:", 10) || !strncasecmp(l, "x-forwarded-host:", 17))) rq.public = 1;
-        else if (!strncasecmp(l, "content-length:", 15)) rq.clen = atoll(l + 15);
+        else if (!strncasecmp(l, "content-length:", 15)) { long long v = atoll(l + 15); if (cl_seen && v != rq.clen) rq.chunked = 1; /* duplicado e divergente: inválido */ rq.clen = v; cl_seen = 1; }
+        else if (!strncasecmp(l, "transfer-encoding:", 18)) rq.chunked = 1; // corpo em pedaços não é suportado: nunca tratar como corpo vazio
     }
+    if (rq.chunked) rq.clen = -1;
     route(c, &rq);
 done:
     close(c);
@@ -2405,7 +2989,7 @@ int main(int argc, char **argv) {
     char p[PATH_MAX];
     dpath(p, sizeof p, "apps"); mkdirp(p); dpath(p, sizeof p, "dbs"); mkdirp(p);
     chmod(cfg.data, 0700);
-    dom_load(); db_load_all(); api_token_load();
+    dom_load(); db_load_all(); bk_load_all(); api_token_load();
     { char pf[PATH_MAX]; dpath(pf, sizeof pf, "pgpass"); setenv("PGPASSFILE", pf, 1); } // só o caminho; a senha está no arquivo (0600, fora do sandbox)
     pthread_mutex_lock(&acmx); intern(cfg.admin, 1); pthread_mutex_unlock(&acmx);
     if (!user_ok(cfg.admin)) { fprintf(stderr, "admin=%s inválido\n", cfg.admin); return 1; }

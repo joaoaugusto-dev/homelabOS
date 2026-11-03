@@ -324,7 +324,7 @@ function renderDbs() {
         h("div", { class: "dbpw" }, h("span", {}, "Senha"), copyField(d.password, true)),
         h("div", {}, h("span", { class: "apps-in" }, users.length ? `Usado por ${users.join(", ")}` : "Não está ligado a nenhuma aplicação")),
         h("div", {}, h("span", { class: "apps-in" }, "Dentro de container, o servidor é host.containers.internal"))),
-      h("div", { class: "acard-b" }, btn("Copiar URL de conexão", "copy", { onclick: () => copy(url, "URL copiada") }), h("span", { class: "sp" }),
+      h("div", { class: "acard-b" }, btn("Explorar", "table", { primary: true, onclick: () => { location.hash = `#bancos/${enc(d.id)}`; } }), btn("Copiar URL", "copy", { onclick: () => copy(url, "URL copiada") }), h("span", { class: "sp" }),
         iconBtn("trash", "Excluir", async () => {
           if (!(await confirmDlg({ title: `Excluir o banco “${d.name}”?`, text: "Apaga o banco e o usuário com todos os dados. Não dá para desfazer.", ok: "Excluir" }))) return;
           await act(`/api/db/delete?id=${d.id}`, null, "Banco excluído");
@@ -479,15 +479,256 @@ function drawStats() {
   body.replaceChildren(box);
 }
 
+/* ---------- histórico de deploys ---------- */
+let DP = null, dpBusy = false;
+const dpDur = (s) => (s < 60 ? `${s} s` : `${Math.floor(s / 60)} min ${s % 60} s`);
+function dpFill() {
+  const sel = $("#dp-app"); if (!D) return;
+  const want = D.apps.map((a) => a.id).join(",");
+  if (sel.dataset.k === want) return;
+  const cur = sel.value; sel.dataset.k = want;
+  sel.replaceChildren(h("option", { value: "" }, "Todas as aplicações"), ...D.apps.map((a) => h("option", { value: a.id }, a.name)));
+  sel.value = D.apps.some((a) => a.id === cur) ? cur : "";
+}
+async function loadDeploys() {
+  if (!location.hash.startsWith("#deploys") || dpBusy || !D) return;
+  dpBusy = true;
+  try {
+    const app = $("#dp-app").value, r = await api(`/api/deploys?limit=200${app ? `&app=${encodeURIComponent(app)}` : ""}`);
+    if (r.ok) { DP = await r.json(); drawDeploys(); }
+  } catch { /* a próxima volta tenta de novo */ } finally { dpBusy = false; }
+}
+function openDeployLog(x) {
+  $("#dl-t").textContent = `${x.name} · ${fdate(x.ts)}`; $("#dl-pre").textContent = "Carregando…";
+  $("#dlg-dl").showModal();
+  api(`/api/deploy/log?id=${encodeURIComponent(x.app)}&ts=${x.ts}`).then(async (r) => { $("#dl-pre").textContent = r.ok ? (await r.text()) || "(log vazio)" : await errMsg(r); }).catch(() => {});
+}
+function drawDeploys() {
+  const res = segValue($("#dp-res"), "r"), body = $("#dp-body");
+  const oks = DP.deploys.filter((x) => x.res === "ok"), rows = DP.deploys.filter((x) => !res || x.res === res);
+  const avg = oks.length ? Math.round(oks.reduce((n, x) => n + x.secs, 0) / oks.length) : 0, last = DP.deploys[0];
+  const stat = (x) => (x.res === "ok" ? h("span", { class: "dp-st ok" }, h("i", {}), "Ok") : h("span", { class: "dp-st bad" }, h("i", {}), "Erro"));
+  const tr = (x) => h("tr", { class: x.log ? "click" : "", ...(x.log ? { tabindex: "0", role: "button", onclick: () => openDeployLog(x), onkeydown: (e) => { if (e.key === "Enter") openDeployLog(x); } } : { title: "O log deste deploy não foi guardado" }) },
+    h("td", {}, stat(x)), h("td", {}, h("b", {}, x.name)),
+    h("td", { class: "dp-msg" }, x.sha !== "-" && x.sha !== "0000000" ? h("code", {}, x.sha) : null, x.msg && x.msg !== "-" ? ` ${x.msg}` : ""),
+    h("td", {}, TRIG[x.trig] || (x.trig === "upload" ? "Envio de arquivo" : x.trig)), h("td", { class: "r" }, dpDur(x.secs)), h("td", { class: "r", title: new Date(x.ts * 1000).toLocaleString("pt-BR") }, ago(x.ts)));
+  const live = DP.building.filter((b) => !$("#dp-app").value || b.app === $("#dp-app").value).map((b) =>
+    h("tr", { class: "click", tabindex: "0", role: "button", onclick: () => openLogs(b.app, "deploy") }, h("td", {}, h("span", { class: "dp-st run" }, h("i", {}), "Em andamento")), h("td", {}, h("b", {}, b.name)), h("td", { class: "dp-msg" }, "Construindo agora… clique para acompanhar o log"), h("td", {}), h("td", { class: "r" }, dpDur(Math.max(0, Math.floor(Date.now() / 1000 - b.since)))), h("td", { class: "r" }, ago(b.since))));
+  body.replaceChildren(h("div", {},
+    h("div", { class: "kpis" },
+      kpi("Deploys", nf0.format(DP.deploys.length), "no histórico carregado"),
+      kpi("Taxa de sucesso", DP.deploys.length ? `${Math.round((oks.length / DP.deploys.length) * 100)}%` : "–", `${nf0.format(DP.deploys.length - oks.length)} com erro`),
+      kpi("Duração média", oks.length ? dpDur(avg) : "–", "só deploys com sucesso"),
+      kpi("Último deploy", last ? ago(last.ts) : "–", last ? `${last.name} · ${last.res === "ok" ? "ok" : "erro"}` : "nenhum ainda")),
+    rows.length || live.length ? h("div", { class: "card dp-card" }, h("table", { class: "hist dp" }, h("thead", {}, h("tr", {}, ...["Resultado", "Aplicação", "Commit", "Origem", "Duração", "Quando"].map((x, i) => h("th", { class: i > 3 ? "r" : "" }, x)))), h("tbody", {}, ...live, ...rows.map(tr))))
+      : h("div", { class: "card empty" }, h("b", {}, res ? "Nenhum deploy com esse filtro" : "Nenhum deploy ainda"), h("span", {}, "Cada deploy, manual, por webhook ou por envio de arquivo, aparece aqui com o log completo."))));
+}
+$("#dp-app").addEventListener("change", loadDeploys);
+$("#dp-res").addEventListener("change", () => { if (DP) drawDeploys(); });
+setInterval(() => { if (!document.hidden) loadDeploys(); }, 4000);
+
+/* ---------- explorador de banco ---------- */
+let X = null; // {id, db, tables, sel, tab, page, sort, dir, seq, sql}
+const enc = encodeURIComponent;
+function grid(g, o = {}) {
+  if (!g.columns.length) return h("div", { class: "card empty" }, h("b", {}, g.msg || "Comando executado"), h("span", {}, "Sem linhas para mostrar."));
+  return h("div", { class: "grid-w" }, h("table", { class: "grid" },
+    h("thead", {}, h("tr", {}, ...g.columns.map((c) => h("th", o.sort ? { class: "srt", tabindex: "0", onclick: () => o.sort(c), onkeydown: (e) => { if (e.key === "Enter") o.sort(c); } } : {}, c, o.col === c ? (o.dir === "desc" ? " ↓" : " ↑") : "")))),
+    h("tbody", {}, g.rows.length ? g.rows.map((r) => h("tr", {}, r.map((v) => (v === null ? h("td", {}, h("i", { class: "nul" }, "NULL")) : h("td", { title: v, onclick: () => copy(v, "Valor copiado") }, v))))) : h("tr", {}, h("td", { colspan: g.columns.length, class: "muted" }, "Nenhuma linha")))));
+}
+const xErr = (m) => h("div", { class: "notice err" }, m);
+async function xget(url) { const r = await api(url, { timeout: 40000 }); if (!r.ok) throw new Error(await errMsg(r)); return r.json(); }
+function openDbx(id) {
+  const db = D.dbs.find((d) => d.id === id);
+  if (!db) { location.hash = "#bancos"; return; }
+  if (!X || X.id !== id) X = { id, db, tables: null, sel: null, tab: "data", page: 0, sort: "", dir: "asc", seq: 0, sql: "" };
+  $("#dbx-name").textContent = db.name; $("#dbx-eng").textContent = ENG[db.engine];
+  segSet($("#dbx-tabs"), "t", X.tab);
+  if (!X.tables) xTables(); else { xList(); xLoad(); }
+}
+async function xTables() {
+  const box = $("#dbx-tables"); box.replaceChildren(h("p", { class: "muted small" }, "Carregando tabelas…"));
+  try {
+    const g = await xget(`/api/db/view?id=${enc(X.id)}&what=tables`);
+    X.tables = g.rows.map(([s, name, kind, est, bytes]) => ({ s, name, kind, est: +est, bytes: +bytes }));
+    if (!X.sel && X.tables.length) X.sel = X.tables[0];
+    xList(); xLoad();
+  } catch (e) { if (e.message !== "login") { box.replaceChildren(xErr(e.message)); $("#dbx-body").replaceChildren(); } }
+}
+function xList() {
+  const box = $("#dbx-tables");
+  box.replaceChildren(h("div", { class: "card-h" }, h("span", {}, "Tabelas"), h("span", { class: "muted small" }, X.tables.length)),
+    X.tables.length ? h("ul", {}, X.tables.map((t) => h("li", {}, h("button", { type: "button", class: X.sel === t ? "on" : "", onclick: () => { X.sel = t; X.page = 0; X.sort = ""; if (X.tab === "sql") { X.tab = "data"; segSet($("#dbx-tabs"), "t", "data"); } xList(); xLoad(); } },
+      icon(t.kind === "view" ? "eye" : "table"), h("span", { class: "k" }, (t.s && t.s !== "public" ? `${t.s}.` : "") + t.name), h("small", {}, t.kind === "view" ? "view" : t.est >= 0 ? `~${nf0.format(t.est)}` : "")))))
+      : h("p", { class: "muted small" }, "Este banco ainda não tem tabelas."));
+}
+async function xLoad() {
+  const body = $("#dbx-body"), seq = ++X.seq;
+  if (X.tab === "sql") return xSql();
+  if (!X.sel) { body.replaceChildren(h("div", { class: "card empty" }, h("b", {}, "Escolha uma tabela"))); return; }
+  const q = `&s=${enc(X.sel.s || "")}&t=${enc(X.sel.name)}`;
+  try {
+    if (X.tab === "cols") { const g = await xget(`/api/db/view?id=${enc(X.id)}&what=cols${q}`); if (seq === X.seq) body.replaceChildren(grid(g)); return; }
+    const g = await xget(`/api/db/view?id=${enc(X.id)}&what=rows${q}&page=${X.page}${X.sort ? `&sort=${enc(X.sort)}&dir=${X.dir}` : ""}`);
+    if (seq !== X.seq) return;
+    const from = g.page * g.size + 1, to = g.page * g.size + g.count, pages = g.total > 0 ? Math.ceil(g.total / g.size) : 1;
+    body.replaceChildren(grid(g, { col: X.sort, dir: X.dir, sort: (c) => { X.dir = X.sort === c && X.dir === "asc" ? "desc" : "asc"; X.sort = c; X.page = 0; xLoad(); } }),
+      h("div", { class: "pager" }, h("span", { class: "muted small" }, g.count ? `${nf0.format(from)}–${nf0.format(to)}${g.total >= 0 ? ` de ${nf0.format(g.total)}` : ""} · ${g.ms} ms` : `0 linhas · ${g.ms} ms`),
+        h("span", { class: "sp" }), btn("Anterior", null, { disabled: g.page <= 0, onclick: () => { X.page--; xLoad(); } }), h("span", { class: "muted small" }, `${g.page + 1} / ${pages}`), btn("Próxima", null, { disabled: g.total >= 0 ? g.page + 1 >= pages : g.count < g.size, onclick: () => { X.page++; xLoad(); } })));
+  } catch (e) { if (e.message !== "login" && seq === X.seq) body.replaceChildren(xErr(e.message)); }
+}
+function xSql() {
+  const ta = h("textarea", { class: "sqlbox", rows: "7", spellcheck: "false", autocapitalize: "none", placeholder: X.db.engine === "postgres" ? "SELECT * FROM tabela LIMIT 20" : "SELECT * FROM tabela LIMIT 20", "aria-label": "Comando SQL" });
+  ta.value = X.sql;
+  const ro = h("input", { type: "checkbox", checked: "" }), out = h("div", { class: "sql-out" });
+  const run = async () => {
+    X.sql = ta.value; const w = !ro.checked;
+    if (w && /^\s*(drop|truncate|delete|alter)\b/i.test(ta.value) && !(await confirmDlg({ title: "Executar este comando?", text: "Ele altera ou apaga dados do banco e não dá para desfazer.", ok: "Executar" }))) return;
+    b.disabled = true; out.replaceChildren(h("p", { class: "muted small" }, "Executando…"));
+    try {
+      const r = await post("/api/db/sql", { id: X.id, sql: ta.value, ro: w ? "0" : "1" });
+      if (!r.ok) { out.replaceChildren(xErr(await errMsg(r))); return; }
+      const g = await r.json();
+      out.replaceChildren(h("p", { class: "muted small" }, `${g.msg ? `${g.msg} · ` : ""}${g.columns.length ? `${nf0.format(g.count)} linha${g.count === 1 ? "" : "s"}${g.truncated ? " (resultado cortado)" : ""} · ` : ""}${g.ms} ms`), g.columns.length || !g.msg ? grid(g) : null);
+      if (w) xTables();
+    } catch (e) { if (e.message !== "login") out.replaceChildren(xErr("Sem resposta do servidor.")); } finally { b.disabled = false; }
+  };
+  const b = btn("Executar", "play", { primary: true, onclick: run });
+  ta.addEventListener("keydown", (e) => { if ((e.ctrlKey || e.metaKey) && e.key === "Enter") { e.preventDefault(); run(); } });
+  $("#dbx-body").replaceChildren(h("div", { class: "card sqlcard" }, ta,
+    h("div", { class: "sql-bar" }, b, h("label", { class: "inl" }, ro, h("span", {}, "Somente leitura")), h("span", { class: "sp" }), h("span", { class: "muted small" }, "Ctrl+Enter executa · um comando por vez")),
+    h("p", { class: "hint" }, "Roda com o usuário do próprio banco, nunca como administrador. Desmarque “somente leitura” para alterar dados.")), out);
+}
+$("#dbx-tabs").addEventListener("change", () => { if (!X) return; X.tab = segValue($("#dbx-tabs"), "t"); xLoad(); });
+
+/* ---------- buckets (arquivos) ---------- */
+let BK = { id: "", path: "", list: null, seq: 0 };
+const bkUrl = (id, key, dl) => `/api/bucket/file?id=${enc(id)}&key=${enc(key)}${dl ? "&dl=1" : ""}`;
+const bkHash = (id, path) => `#arquivos${id ? `/${enc(id)}${path ? `/${path.split("/").map(enc).join("/")}` : ""}` : ""}`;
+const EXT = (n) => (n.includes(".") ? n.split(".").pop().toLowerCase() : "");
+const KIND = (n) => { const e = EXT(n); return ["png", "jpg", "jpeg", "gif", "webp", "avif", "bmp", "ico", "svg"].includes(e) ? "img" : ["mp4", "m4v", "webm", "mov"].includes(e) ? "vid" : ["mp3", "wav", "ogg", "m4a", "flac"].includes(e) ? "aud" : e === "pdf" ? "pdf" : "file"; };
+function askName(o) {
+  return new Promise((res) => {
+    const d = $("#dlg-name"); $("#nm-t").textContent = o.title; $("#nm-l").textContent = o.label || "Nome"; $("#nm-in").value = o.value || ""; $("#nm-ok").textContent = o.ok || "OK";
+    const done = () => { d.removeEventListener("close", done); res(d.returnValue === "ok" ? $("#nm-in").value.trim() : null); };
+    d.returnValue = ""; d.addEventListener("close", done); d.showModal(); $("#nm-in").focus(); $("#nm-in").select();
+  });
+}
+function renderBuckets() {
+  const bar = $("#bk-bar"), body = $("#bk-body");
+  if (!BK.id) {
+    bar.replaceChildren(h("div", { class: "notes muted" }, "Guarde fotos, documentos e arquivos de qualquer tipo. Organize em pastas e abra pelo painel."), h("button", { class: "btn primary", onclick: openBkForm }, icon("plus"), "Novo bucket"));
+    body.replaceChildren(h("div", { class: "cards" }, D.buckets.length ? D.buckets.slice().sort((a, b) => a.name.localeCompare(b.name, "pt-BR")).map((b) => h("article", { class: "card acard click", tabindex: "0", role: "link", onclick: () => { location.hash = bkHash(b.id, ""); }, onkeydown: (e) => { if (e.key === "Enter") location.hash = bkHash(b.id, ""); } },
+      h("div", { class: "acard-h" }, icon("folder"), h("b", {}, b.name), h("span", { class: "tag" }, SCOPE(b.owner))),
+      h("div", { class: "acard-l" }, h("div", {}, h("span", {}, `${nf0.format(b.files)} arquivo${b.files === 1 ? "" : "s"} · ${bytesF(b.bytes)}`)), h("div", {}, icon(b.public ? "globe" : "lock"), h("span", {}, b.public ? "Público na rede local" : "Privado")))))
+      : h("div", { class: "card empty", style: "grid-column:1/-1" }, h("b", {}, "Nenhum bucket ainda"), h("span", {}, "Crie um bucket para guardar imagens e arquivos."), btn("Novo bucket", "plus", { primary: true, onclick: openBkForm }))));
+    return;
+  }
+  const b = D.buckets.find((x) => x.id === BK.id);
+  if (!b) { location.hash = "#arquivos"; return; }
+  const parts = BK.path ? BK.path.split("/") : [];
+  const crumbs = h("div", { class: "crumbs" }, h("a", { href: "#arquivos" }, "Arquivos"), h("span", {}, "/"), parts.length ? h("a", { href: bkHash(b.id, "") }, b.name) : h("b", {}, b.name),
+    ...parts.flatMap((p, i) => [h("span", {}, "/"), i === parts.length - 1 ? h("b", {}, p) : h("a", { href: bkHash(b.id, parts.slice(0, i + 1).join("/")) }, p)]));
+  const pick = (dir) => { const inp = h("input", { type: "file", multiple: "", hidden: "", ...(dir ? { webkitdirectory: "" } : {}) }); inp.onchange = () => { bkUpload([...inp.files]); inp.remove(); }; document.body.append(inp); inp.click(); };
+  bar.replaceChildren(crumbs, h("div", { class: "bk-actions" },
+    btn("Enviar arquivos", "up", { primary: true, onclick: () => pick(false) }), btn("Enviar pasta", "folder", { onclick: () => pick(true) }),
+    btn("Nova pasta", "plus", { onclick: async () => { const n = await askName({ title: "Nova pasta", ok: "Criar" }); if (n) bkOp("mkdir", { key: BK.path ? `${BK.path}/${n}` : n }, "Pasta criada"); } }),
+    btn(b.public ? "Público" : "Privado", b.public ? "globe" : "lock", { title: b.public ? "Qualquer pessoa na rede local abre /b/" + b.id + "/…. Clique para tornar privado." : "Clique para abrir os arquivos na rede local sem login.", onclick: () => act("/api/bucket/update", { id: b.id, pub: b.public ? "0" : "1" }, b.public ? "Bucket agora é privado" : "Bucket público na rede local") }),
+    iconBtn("trash", "Excluir bucket", async () => { if (await confirmDlg({ title: `Excluir o bucket “${b.name}”?`, text: `Apaga ${nf0.format(b.files)} arquivo(s) (${bytesF(b.bytes)}). Não dá para desfazer.`, ok: "Excluir" })) { const j = await act("/api/bucket/delete", { id: b.id }, "Bucket excluído"); if (j) location.hash = "#arquivos"; } })));
+  if (!BK.list) { body.replaceChildren(h("p", { class: "muted" }, "Carregando…")); return; }
+  const es = BK.list.slice().sort((x, y) => y.dir - x.dir || x.name.localeCompare(y.name, "pt-BR", { numeric: true }));
+  const key = (n) => (BK.path ? `${BK.path}/${n}` : n);
+  body.replaceChildren(h("div", { class: "bk-drop", id: "bk-drop" },
+    h("div", { id: "bk-up", class: "bk-up", hidden: "" }),
+    es.length ? h("div", { class: "bk-grid" }, es.map((e) => {
+      const k = key(e.name), kind = e.dir ? "dir" : KIND(e.name);
+      const prev = h("div", { class: "bk-prev " + kind }, kind === "img" ? h("img", { src: bkUrl(b.id, k), alt: "", loading: "lazy", draggable: "false" }) : kind === "dir" ? icon("folder") : h("span", {}, EXT(e.name).slice(0, 4) || "arq"));
+      const open = () => (e.dir ? (location.hash = bkHash(b.id, k)) : bkPreview(b, k, e, kind));
+      return h("article", { class: "bk-tile" }, h("div", { class: "bk-hit", tabindex: "0", role: "button", "aria-label": `${e.dir ? "Abrir pasta" : "Abrir"} ${e.name}`, onclick: open, onkeydown: (ev) => { if (ev.key === "Enter") open(); } }, prev, h("b", { title: e.name }, e.name), h("small", {}, e.dir ? "pasta" : `${bytesF(e.size)} · ${ago(e.mtime)}`)),
+        h("div", { class: "bk-tb" }, e.dir ? null : h("a", { class: "icon-btn", href: bkUrl(b.id, k, true), title: "Baixar", "aria-label": "Baixar", download: e.name }, icon("down")),
+          b.public && !e.dir ? iconBtn("copy", "Copiar link público", () => copy(`${location.origin}/b/${enc(b.id)}/${k.split("/").map(enc).join("/")}`, "Link copiado")) : null,
+          iconBtn("edit", "Renomear ou mover", async () => { const n = await askName({ title: "Renomear ou mover", label: "Novo caminho dentro do bucket", value: k, ok: "Salvar" }); if (n && n !== k) bkOp("mv", { key: k, to: n }, "Renomeado"); }),
+          iconBtn("trash", "Excluir", async () => { if (await confirmDlg({ title: `Excluir “${e.name}”?`, text: e.dir ? "Apaga a pasta e tudo que está dentro dela." : "Não dá para desfazer.", ok: "Excluir" })) bkOp("rm", { key: k }, "Excluído"); })));
+    })) : h("div", { class: "card empty" }, h("b", {}, BK.path ? "Pasta vazia" : "Bucket vazio"), h("span", {}, "Arraste arquivos para cá ou use “Enviar arquivos”."))));
+  const dz = $("#bk-drop");
+  dz.addEventListener("dragover", (e) => { e.preventDefault(); dz.classList.add("over"); });
+  dz.addEventListener("dragleave", (e) => { if (e.target === dz) dz.classList.remove("over"); });
+  dz.addEventListener("drop", (e) => { e.preventDefault(); dz.classList.remove("over"); if (e.dataTransfer.files.length) bkUpload([...e.dataTransfer.files]); });
+}
+async function bkLoad() {
+  if (!BK.id || !D) return;
+  const seq = ++BK.seq;
+  try {
+    const r = await api(`/api/bucket/list?id=${enc(BK.id)}&prefix=${enc(BK.path)}`);
+    if (seq !== BK.seq) return;
+    if (!r.ok) { toast(await errMsg(r)); location.hash = bkHash(BK.id, ""); return; }
+    BK.list = (await r.json()).entries; renderBuckets();
+  } catch { /* sem resposta: mantém o que já está na tela */ }
+}
+async function bkOp(op, data, okMsg) {
+  const j = await act(`/api/bucket/${op}`, { id: BK.id, ...data }, okMsg);
+  if (j) bkLoad();
+}
+let bkBusy = false;
+async function bkUpload(files) {
+  if (bkBusy || !files.length) return;
+  bkBusy = true; const id = BK.id, path = BK.path; let okN = 0, fail = "";
+  const line = () => $("#bk-up");
+  for (let i = 0; i < files.length; i++) {
+    const f = files[i], rel = f.webkitRelativePath || f.name, key = path ? `${path}/${rel}` : rel;
+    const err = await new Promise((res) => {
+      const x = new XMLHttpRequest();
+      x.open("POST", `/api/bucket/upload?id=${enc(id)}&key=${enc(key)}`); x.setRequestHeader("X-Requested-With", "hosting");
+      x.upload.onprogress = (e) => { const el = line(); if (el && e.lengthComputable) { el.hidden = false; el.replaceChildren(h("span", {}, `Enviando ${i + 1}/${files.length}: ${f.name}`), h("progress", { max: "1", value: String(e.loaded / e.total) })); } };
+      x.onload = () => { let m; try { m = JSON.parse(x.responseText).error; } catch {} res(x.status === 200 ? null : m || "falha no envio"); };
+      x.onerror = () => res("conexão perdida durante o envio");
+      x.send(f);
+    });
+    if (err) { fail = `${f.name}: ${err}`; break; }
+    okN++;
+  }
+  bkBusy = false;
+  toast(fail ? `${okN} enviado(s). Parou em ${fail}` : `${okN} arquivo${okN === 1 ? "" : "s"} enviado${okN === 1 ? "" : "s"}`);
+  await refresh(); if (BK.id === id) bkLoad();
+}
+function bkPreview(b, k, e, kind) {
+  const u = bkUrl(b.id, k);
+  if (kind === "pdf" || kind === "file") { if (kind === "pdf" || ["txt", "md", "json", "csv", "log", "yml", "yaml", "xml", "html", "css", "js"].includes(EXT(e.name))) window.open(u, "_blank", "noopener"); else location.href = bkUrl(b.id, k, true); return; }
+  $("#pv-t").textContent = e.name;
+  $("#pv-body").replaceChildren(kind === "img" ? h("img", { src: u, alt: e.name }) : kind === "vid" ? h("video", { src: u, controls: "", autoplay: "" }) : h("audio", { src: u, controls: "", autoplay: "" }));
+  $("#dlg-pv").showModal();
+}
+$("#dlg-pv").addEventListener("close", () => $("#pv-body").replaceChildren());
+function openBkForm() { $("#bk-form").reset(); $("#bk-err").textContent = ""; segSet($("#bk-scope"), "s", "private"); $("#dlg-bk").showModal(); $("#bk-form").elements.name.focus(); }
+$("#bk-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const b = $("#bk-ok"); b.disabled = true; $("#bk-err").textContent = "";
+  try {
+    const el = e.target.elements, r = await post("/api/bucket/create", { name: el.name.value, scope: segValue($("#bk-scope"), "s"), pub: el.pub.checked ? "1" : "0" });
+    if (!r.ok) { $("#bk-err").textContent = await errMsg(r); return; }
+    $("#dlg-bk").close(); toast("Bucket criado"); refresh();
+  } catch { $("#bk-err").textContent = "Não foi possível falar com o servidor."; } finally { b.disabled = false; }
+});
+
 /* ---------- rotas e atualização ---------- */
-const TITLES = { apps: "Aplicações", estatisticas: "Estatísticas", bancos: "Bancos de dados", dominios: "Domínios" };
+const TITLES = { apps: "Aplicações", estatisticas: "Estatísticas", deploys: "Histórico de deploys", bancos: "Bancos de dados", arquivos: "Arquivos", dominios: "Domínios" };
 function route() {
-  const v = TITLES[location.hash.slice(1)] ? location.hash.slice(1) : "apps";
-  $$(".view").forEach((s) => { s.hidden = s.id !== "v-" + v; });
+  const [h0, ...sub] = location.hash.slice(1).split("/"), v = TITLES[h0] ? h0 : "apps";
+  const dec = (x) => { try { return decodeURIComponent(x); } catch { return x; } };
+  const dbx = v === "bancos" && sub[0] && D, view = dbx ? "dbx" : v;
+  $$(".view").forEach((s) => { s.hidden = s.id !== "v-" + view; });
   $$("#nav a").forEach((a) => a.classList.toggle("on", a.dataset.v === v));
-  $("#title").textContent = TITLES[v]; document.title = `${TITLES[v]} · Hospedagem`;
+  const title = dbx ? "Explorar banco" : TITLES[v];
+  $("#title").textContent = title; document.title = `${title} · Hospedagem`;
   scrollTo(0, 0);
   if (v === "estatisticas") { stFill(); loadStats(); }
+  if (v === "deploys") { dpFill(); loadDeploys(); }
+  if (dbx) openDbx(dec(sub[0]));
+  if (v === "arquivos" && D) {
+    const id = dec(sub[0] || ""), path = sub.slice(1).map(dec).join("/");
+    if (id !== BK.id || path !== BK.path) BK = { id, path, list: null, seq: BK.seq };
+    renderBuckets(); bkLoad();
+  }
 }
 addEventListener("hashchange", route);
 $("#f-apps").addEventListener("click", (e) => { const b = e.target.closest("button"); if (!b) return; filter = b.dataset.f; segSet($("#f-apps"), "f", filter); if (D) renderApps(); });
@@ -497,7 +738,8 @@ function render() {
   const t = $("#tun"), using = D.apps.some((a) => a.host) || D.hook_host;
   $(".dot", t).classList.toggle("on", D.tunnel.up);
   $("#tun-t").textContent = D.tunnel.up ? "Túnel ativo" : using ? "Túnel parado" : "Sem endereços públicos";
-  renderApps(); renderDbs(); renderDoms(); stFill();
+  renderApps(); renderDbs(); renderDoms(); stFill(); dpFill();
+  if (location.hash.startsWith("#arquivos")) renderBuckets();
 }
 let offline = false;
 async function refresh() {

@@ -62,10 +62,10 @@ esac
 EOF
 chmod +x "$T/bin/podman"
 for b in psql mariadb; do
-  printf '#!/bin/sh\necho "ARGS $*" >> "$FAKE_LOG"\nsed "s/^/IN /" >> "$FAKE_LOG"\n[ -e "$FAKE_DOWN" ] && { echo "connection refused"; exit 2; }\nexit 0\n' > "$T/bin/$b"
+  printf '#!/bin/sh\necho "ARGS $*" >> "$FAKE_LOG"\necho "ENV pg=$PGPASSWORD my=$MYSQL_PWD opts=$PGOPTIONS" >> "$FAKE_LOG"\nsed "s/^/IN /" >> "$FAKE_LOG"\n[ -e "$FAKE_DOWN" ] && { echo "connection refused"; exit 2; }\n[ -e "$FAKE_ERR" ] && { echo "ERROR:  relation \\"nope\\" does not exist"; exit 3; }\n[ -s "$FAKE_OUT" ] && cat "$FAKE_OUT"\nexit 0\n' > "$T/bin/$b"
   chmod +x "$T/bin/$b"
 done
-export FAKE_LOG=$T/db.log FAKE_DOWN=$T/db_down; touch "$FAKE_DOWN"; export PATH=$T/bin:$PATH
+export FAKE_LOG=$T/db.log FAKE_DOWN=$T/db_down FAKE_OUT=$T/db_out FAKE_ERR=$T/db_err; touch "$FAKE_DOWN"; export PATH=$T/bin:$PATH
 
 # cloudflared falso: registra os argumentos; "list" só acha o túnel depois de "create"; o túnel em si é um sleep
 export CF_LOG=$T/cf.log CF_CREATED=$T/tunnel_created
@@ -407,6 +407,104 @@ UPK=$H
 check "e o deploy sem Dockerfile falha em vez de rodar comando no servidor" 'upload nat "$T/static.zip" | grep -q ok; sleep 3; appb nat last | grep -q "Dockerfile" && [ "$(appb nat state)" != running ]'
 UPK=
 check "administrador continua podendo native" 'api ana POST /api/app/save "name=NatAna&scope=private&source=zip&runtime=native&start=python3%20-m%20http.server" | grep -q "\"ok\":1" && [ "$(appf natana runtime)" = native ]'
+
+# ---- histórico de deploys: lista única, log arquivado por deploy, poda ----
+DJ=$(api ana GET /api/deploys)
+check "histórico: lista deploys de todos os apps com resultado, origem e se há log guardado" 'echo "$DJ" | python3 -c "import sys,json; d=json.load(sys.stdin); assert d[\"deploys\"] and all(k in d[\"deploys\"][0] for k in (\"app\",\"name\",\"ts\",\"sha\",\"trig\",\"res\",\"msg\",\"secs\",\"log\")); assert [x for x in d[\"deploys\"] if x[\"app\"]==\"estatico\" and x[\"trig\"]==\"upload\" and x[\"res\"]==\"ok\"]"'
+check "histórico: mais recentes primeiro" 'echo "$DJ" | python3 -c "import sys,json; t=[x[\"ts\"] for x in json.load(sys.stdin)[\"deploys\"]]; assert t==sorted(t,reverse=True)"'
+dep_filter() { python3 -c 'import sys,json; d=json.load(sys.stdin)["deploys"]; sys.exit(0 if d and {x["app"] for x in d}=={"estatico"} else 1)'; }
+dep_beto() { python3 -c 'import sys,json; d=json.load(sys.stdin)["deploys"]; sys.exit(0 if d and "estatico" not in {x["app"] for x in d} else 1)'; }
+dep_err() { python3 -c 'import sys,json; d=[x for x in json.load(sys.stdin)["deploys"] if x["res"]=="erro"]; sys.exit(0 if d and d[0]["log"] else 1)'; }
+check "histórico: filtro por app" 'api ana GET "/api/deploys?app=estatico" | dep_filter'
+check "histórico: o beto só enxerga deploys de apps visíveis a ele" 'api beto GET /api/deploys | dep_beto'
+EST=$(echo "$DJ" | python3 -c 'import sys,json; print([x["ts"] for x in json.load(sys.stdin)["deploys"] if x["app"]=="estatico" and x["res"]=="ok"][0])')
+check "log do deploy arquivado e acessível pelo histórico" 'api ana GET "/api/deploy/log?id=estatico&ts=$EST" | grep -q "==> pronto"'
+check "log arquivado: ts inválido => 400, inexistente => 404, app alheio => 404" '[ "$(curl -s -o /dev/null -w %{http_code} -H "Cookie: hl=$J" "http://127.0.0.1:$PORT/api/deploy/log?id=estatico&ts=../x")" = 400 ] && [ "$(curl -s -o /dev/null -w %{http_code} -H "Cookie: hl=$J" "http://127.0.0.1:$PORT/api/deploy/log?id=estatico&ts=123")" = 404 ] && [ "$(curl -s -o /dev/null -w %{http_code} -H "Cookie: hl=$H" "http://127.0.0.1:$PORT/api/deploy/log?id=estatico&ts=$EST")" = 404 ]'
+check "log do deploy com erro também fica guardado" 'api ana GET "/api/deploys?app=estatico" | dep_err'
+mkdir -p "$APP/apps/estatico/deploys"; for i in $(seq 1 34); do : > "$APP/apps/estatico/deploys/$((1000000000 + i)).log"; done
+api ana POST "/api/app/deploy?id=estatico" >/dev/null; wait_state estatico running
+check "poda: só os $((30)) logs mais recentes ficam (o mais antigo sai, o novo entra)" '[ "$(ls "$APP/apps/estatico/deploys" | wc -l)" = 30 ] && [ ! -e "$APP/apps/estatico/deploys/1000000001.log" ] && ls "$APP/apps/estatico/deploys" | grep -qv "^10000000"'
+check "mensagem com TAB/quebra de linha não quebra o histórico (uma linha por deploy)" '[ "$(awk -F"\t" "NF!=6" "$APP/apps/estatico/history.tsv" | wc -l)" = 0 ]'
+
+# ---- explorador de bancos: roda como o próprio usuário do banco ----
+api ana POST /api/db/create "name=Explora&engine=postgres&scope=private" | grep -q '"ok":1'
+api ana POST /api/db/create "name=ExpMy&engine=mysql&scope=private" | grep -q '"ok":1'
+: > "$FAKE_LOG"; printf 'schema,name,kind,est,bytes\npublic,users,table,10,8192\n' > "$FAKE_OUT"
+R=$(api ana GET "/api/db/view?id=h_explora&what=tables")
+check "bancos: lista de tabelas vira JSON (colunas e linhas)" 'echo "$R" | python3 -c "import sys,json; d=json.load(sys.stdin); assert d[\"columns\"]==[\"schema\",\"name\",\"kind\",\"est\",\"bytes\"] and d[\"rows\"]==[[\"public\",\"users\",\"table\",\"10\",\"8192\"]]"'
+PW=$(grep '^pw=' "$APP/dbs/h_explora.conf" | cut -d= -f2)
+check "bancos: entra como o PRÓPRIO usuário do banco (não hosting_admin), senha só no ambiente, somente leitura" 'grep -q "^ARGS -X -h 127.0.0.1 -U h_explora -d h_explora --csv" "$FAKE_LOG" && grep -q "^ENV pg=$PW .*default_transaction_read_only=on" "$FAKE_LOG" && ! grep "^ARGS" "$FAKE_LOG" | grep -q "$PW" && ! grep "^ARGS" "$FAKE_LOG" | grep -q hosting_admin'
+printf 'a,b,c\n\001,"x,y","l1\nl2"\n"",z,"q""uote"\n' > "$FAKE_OUT"
+check "bancos: CSV com NULL, vírgula, quebra de linha, aspas e vazio" 'api ana GET "/api/db/view?id=h_explora&what=rows&t=users" | python3 -c "import sys,json; d=json.load(sys.stdin); assert d[\"rows\"]==[[None,\"x,y\",\"l1\nl2\"],[\"\",\"z\",\"q\\\"uote\"]], d[\"rows\"]; assert d[\"page\"]==0 and d[\"size\"]==50 and \"total\" in d"'
+: > "$FAKE_LOG"; api ana GET "/api/db/view?id=h_explora&what=rows&t=we%22ird&s=ana&page=2&sort=id&dir=desc" >/dev/null
+check "bancos: página, ordem e identificadores entre aspas (aspa dobrada), schema respeitado" 'grep -q -- "-c  SELECT \* FROM \"ana\".\"we\"\"ird\" ORDER BY \"id\" DESC LIMIT 50 OFFSET 100" "$FAKE_LOG"'
+check "bancos: estrutura da tabela usa regclass com o nome entre aspas" 'api ana GET "/api/db/view?id=h_explora&what=cols&t=users" >/dev/null; grep -q "a.attrelid = .\"public\".\"users\".::regclass" "$FAKE_LOG"'
+check "bancos: tabela vazia ou com caractere de controle => 400" '[ "$(curl -s -o /dev/null -w %{http_code} -H "Cookie: hl=$J" "http://127.0.0.1:$PORT/api/db/view?id=h_explora&what=rows&t=")" = 400 ] && [ "$(curl -s -o /dev/null -w %{http_code} -H "Cookie: hl=$J" "http://127.0.0.1:$PORT/api/db/view?id=h_explora&what=rows&t=a%5Cb")" = 400 ]'
+check "bancos: o beto não enxerga o banco privado da ana" '[ "$(curl -s -o /dev/null -w %{http_code} -H "Cookie: hl=$H" "http://127.0.0.1:$PORT/api/db/view?id=h_explora&what=tables")" = 404 ] && api beto POST /api/db/sql "id=h_explora&sql=select+1" | grep -q "não encontrado"'
+# console SQL
+: > "$FAKE_LOG"; printf 'n\n1\n' > "$FAKE_OUT"
+sqlc() { curl -s -m 10 -X POST -H "Cookie: hl=${SQK:-$J}" -H "X-Requested-With: hosting" --data-urlencode "id=${DBID:-h_explora}" --data-urlencode "sql=$1" ${2:+--data-urlencode "ro=$2"} http://127.0.0.1:$PORT/api/db/sql; }
+: > "$FAKE_LOG"
+check "console: executa um comando; psql recebe o SQL com um espaço na frente (barra invertida nunca é meta-comando)" 'R=$(sqlc "select 1;"); echo "$R" | grep -q "\"rows\":\[\[\"1\"\]\]" && grep -q -- "-c  select 1;" "$FAKE_LOG"'
+: > "$FAKE_LOG"; sqlc '\! id' >/dev/null
+check "console: \\! chega ao banco como texto (com o espaço de guarda), não vira meta-comando do psql" 'grep -q -- "-c  \\\\! id" "$FAKE_LOG"'
+check "console: padrão é somente leitura; ro=0 libera escrita" 'sqlc "select 1" >/dev/null; grep -q "default_transaction_read_only=on" "$FAKE_LOG"; : > "$FAKE_LOG"; sqlc "select 1" 0 >/dev/null; ! grep -q "default_transaction_read_only" "$FAKE_LOG" && grep -q "statement_timeout=20000" "$FAKE_LOG"'
+check "console: vários comandos => pede um por vez; vazio => pede SQL" 'sqlc "select 1; select 2" | grep -q "um comando por vez" && sqlc "  ;; " | grep -q "Digite um comando"'
+check "console: ; dentro de texto, comentário e \$\$ não conta como outro comando" 'sqlc "select '"'"';'"'"' -- ; x" | grep -q "\"columns\"" && sqlc "do \$\$ begin perform 1; end \$\$;" | grep -q "\"columns\"" && sqlc "select 1 /* ; */" | grep -q "\"columns\""'
+printf 'UPDATE 3\n' > "$FAKE_OUT"
+check "console: etiqueta de comando (UPDATE 3) vira mensagem, sem tabela" 'sqlc "update t set a=1" 0 | python3 -c "import sys,json; d=json.load(sys.stdin); assert d[\"msg\"]==\"UPDATE 3\" and d[\"columns\"]==[] and d[\"rows\"]==[]"'
+touch "$FAKE_ERR"
+check "console: erro do banco volta como mensagem (400)" 'sqlc "select * from nope" | grep -q "does not exist"'
+rm -f "$FAKE_ERR"
+python3 - > "$FAKE_OUT" <<'EOF'
+print("a,b"); [print(f"{i},v{i}") for i in range(1500)]
+EOF
+check "console: resultado grande é cortado em 1000 linhas e avisa" 'sqlc "select * from big" | python3 -c "import sys,json; d=json.load(sys.stdin); assert d[\"count\"]==1000 and d[\"truncated\"]==1"'
+# MySQL: console só para quem pode comandos no servidor (beto é gestor sem native_users aqui)
+printf 'a\tb\n1\tNULL\n2\tx\\ty\n' > "$FAKE_OUT"; : > "$FAKE_LOG"
+check "mysql: ana (administradora) consulta como o usuário do banco; NULL e \\t do --batch são tratados" 'R=$(DBID=h_expmy sqlc "select * from t"); echo "$R" | python3 -c "import sys,json; d=json.load(sys.stdin); assert d[\"columns\"]==[\"a\",\"b\"] and d[\"rows\"]==[[\"1\",None],[\"2\",\"x\ty\"]], d" && grep -q "^ARGS -h 127.0.0.1 -P 3306 -u h_expmy -D h_expmy --batch" "$FAKE_LOG" && grep -q "^IN SET SESSION TRANSACTION READ ONLY" "$FAKE_LOG" && grep -q "^ENV pg= my=" "$FAKE_LOG"'
+api ana POST /api/db/create "name=ExpMyComum&engine=mysql&scope=shared" >/dev/null
+check "mysql: sem direito a comandos no servidor o console é recusado, mas Dados continua valendo" '[ "$(SQK=$H DBID=h_expmycomum sqlc "select 1" | grep -c "só roda para quem pode executar comandos")" = 1 ] && curl -s -m 10 -H "Cookie: hl=$H" "http://127.0.0.1:$PORT/api/db/view?id=h_expmycomum&what=rows&t=t" | grep -q "\"columns\""'
+: > "$FAKE_OUT"
+api ana POST "/api/db/delete?id=h_explora" >/dev/null; api ana POST "/api/db/delete?id=h_expmy" >/dev/null; api ana POST "/api/db/delete?id=h_expmycomum" >/dev/null
+
+# ---- buckets: arquivos, imagens, pastas ----
+bkapi() { curl -s -m 20 -X POST -H "Cookie: hl=${BK:-$J}" -H "X-Requested-With: hosting" --data-urlencode "id=$1" "${@:3}" "http://127.0.0.1:$PORT/api/bucket/$2"; }
+bkup() { curl -s -m 20 -X POST -H "Cookie: hl=${BK:-$J}" -H "X-Requested-With: hosting" --data-binary "@$3" "http://127.0.0.1:$PORT/api/bucket/upload?id=$1&key=$(enc "$2")"; }
+bkget() { curl -s -m 10 -H "Cookie: hl=${BK:-$J}" "http://127.0.0.1:$PORT/api/bucket/$1" "${@:2}"; }
+check "bucket: criar (privado) e aparecer só para o dono" 'curl -s -m 10 -X POST -H "Cookie: hl=$J" -H "X-Requested-With: hosting" --data-urlencode "name=Fotos da Casa" --data-urlencode scope=private http://127.0.0.1:$PORT/api/bucket/create | grep -q "\"ok\":1" && api ana GET /api/overview | grep -q "\"id\":\"fotos-da-casa\"" && ! api beto GET /api/overview | grep -q fotos-da-casa'
+check "bucket: nome repetido => 409; vazio => 400" '[ "$(curl -s -o /dev/null -w %{http_code} -X POST -H "Cookie: hl=$J" -H "X-Requested-With: hosting" --data-urlencode "name=fotos da casa" http://127.0.0.1:$PORT/api/bucket/create)" = 409 ] && [ "$(curl -s -o /dev/null -w %{http_code} -X POST -H "Cookie: hl=$J" -H "X-Requested-With: hosting" --data-urlencode "name=  " http://127.0.0.1:$PORT/api/bucket/create)" = 400 ]'
+printf 'hello' > "$T/c.txt"; printf '<script>alert(1)</script>' > "$T/x.html"; printf '<svg xmlns="http://www.w3.org/2000/svg"/>' > "$T/i.svg"; head -c 3000 /dev/urandom > "$T/blob.bin"
+check "bucket: upload cria as pastas e grava o arquivo" 'bkup fotos-da-casa "a/b/c.txt" "$T/c.txt" | grep -q "\"ok\":1" && [ "$(cat "$APP/buckets/fotos-da-casa/a/b/c.txt")" = hello ]'
+check "bucket: listagem por pasta (pastas e arquivos com tamanho)" 'bkget "list?id=fotos-da-casa" | python3 -c "import sys,json; e=json.load(sys.stdin)[\"entries\"]; assert e==[{\"name\":\"a\",\"dir\":1,\"size\":0,\"mtime\":e[0][\"mtime\"]}], e" && bkget "list?id=fotos-da-casa&prefix=a/b" | python3 -c "import sys,json; d=json.load(sys.stdin); assert d[\"path\"]==\"a/b\" and [(x[\"name\"],x[\"size\"],x[\"dir\"]) for x in d[\"entries\"]]==[(\"c.txt\",5,0)]"'
+check "bucket: tamanho e nº de arquivos no overview" 'api ana GET /api/overview | python3 -c "import sys,json; b=[x for x in json.load(sys.stdin)[\"buckets\"] if x[\"id\"]==\"fotos-da-casa\"][0]; assert b[\"bytes\"]==5 and b[\"files\"]==1 and b[\"public\"]==0"'
+bad_keys() { local k; for k in "../x" "a/../../y" "/abs" "a//b" "./z" "a/./b" 'a\b'; do [ "$(bkup fotos-da-casa "$k" "$T/c.txt" | grep -c error)" = 1 ] || return 1; done; }
+check "bucket: caminhos perigosos são recusados (nada sai da pasta do bucket)" 'bad_keys && [ ! -e "$APP/buckets/x" ] && [ ! -e "$APP/y" ] && [ ! -e "$APP/buckets/abs" ] && [ ! -e /abs ]'
+rawreq() { python3 -c 'import socket,sys; s=socket.create_connection(("127.0.0.1",int(sys.argv[1])),timeout=3); s.sendall(sys.argv[2].encode().decode("unicode_escape").encode("latin1")); s.settimeout(3)
+try: print(s.recv(200).decode("latin1").split("\r\n")[0])
+except Exception: print("sem resposta")' "$PORT" "$1"; }
+check "bucket: pasta-link (symlink) para fora não vaza, não lista e não aceita escrita" 'ln -s /etc "$APP/buckets/fotos-da-casa/esc"; r=1; [ "$(bkget "file?id=fotos-da-casa&key=esc/hostname" -o /dev/null -w %{http_code})" = 404 ] && [ "$(bkget "list?id=fotos-da-casa&prefix=esc" -o /dev/null -w %{http_code})" = 404 ] && bkup fotos-da-casa esc/evil.txt "$T/c.txt" | grep -q error && [ ! -e /etc/evil.txt ] && bkapi fotos-da-casa mkdir --data-urlencode key=esc/pwned | grep -q error && [ ! -e /etc/pwned ] && r=0; rm -f "$APP/buckets/fotos-da-casa/esc"; [ $r = 0 ]'
+check "bucket: Content-Length duplicado e divergente é recusado (sem criar arquivo)" 'rawreq "POST /api/bucket/upload?id=fotos-da-casa&key=dup.bin HTTP/1.1\r\nHost: x\r\nCookie: hl=$J\r\nX-Requested-With: hosting\r\nContent-Length: 5\r\nContent-Length: 0\r\n\r\nhello" | grep -q " 413 " && [ ! -e "$APP/buckets/fotos-da-casa/dup.bin" ]'
+check "bucket: corpo chunked (sem Content-Length) não vira arquivo vazio" 'rawreq "POST /api/bucket/upload?id=fotos-da-casa&key=chunk.bin HTTP/1.1\r\nHost: x\r\nCookie: hl=$J\r\nX-Requested-With: hosting\r\nTransfer-Encoding: chunked\r\n\r\n5\r\nhello\r\n0\r\n\r\n" | grep -q " 413 " && [ ! -e "$APP/buckets/fotos-da-casa/chunk.bin" ]'
+check "bucket: Content-Length de 3 GB é recusado antes de ler o corpo" 'rawreq "POST /api/bucket/upload?id=fotos-da-casa&key=big.bin HTTP/1.1\r\nHost: x\r\nCookie: hl=$J\r\nX-Requested-With: hosting\r\nContent-Length: 3221225472\r\n\r\n" | grep -q " 413 "'
+check "bucket: arquivo no caminho de uma pasta => erro claro, sem sobrar temporário" 'bkup fotos-da-casa "a/b/c.txt/d" "$T/c.txt" | grep -q error && bkup fotos-da-casa "a/b" "$T/c.txt" | grep -q "já existe uma pasta" && [ -z "$(ls "$APP/buckets" | grep "\.up-")" ]'
+check "bucket: download inline de texto como text/plain, com nosniff" 'H1=$(curl -s -D- -o /dev/null -H "Cookie: hl=$J" "http://127.0.0.1:$PORT/api/bucket/file?id=fotos-da-casa&key=a/b/c.txt"); echo "$H1" | grep -qi "^content-type: text/plain" && echo "$H1" | grep -qi "^content-disposition: inline" && echo "$H1" | grep -qi "^x-content-type-options: nosniff" && [ "$(bkget "file?id=fotos-da-casa&key=a/b/c.txt")" = hello ]'
+check "bucket: dl=1 força download" 'curl -s -D- -o /dev/null -H "Cookie: hl=$J" "http://127.0.0.1:$PORT/api/bucket/file?id=fotos-da-casa&key=a/b/c.txt&dl=1" | grep -qi "^content-disposition: attachment; filename=\"c.txt\""'
+bkup fotos-da-casa "pagina.html" "$T/x.html" >/dev/null; bkup fotos-da-casa "icone.svg" "$T/i.svg" >/dev/null; bkup fotos-da-casa "dados.bin" "$T/blob.bin" >/dev/null
+check "bucket: HTML enviado nunca é servido como HTML; SVG vai com CSP sandbox; binário é anexo" 'curl -s -D- -o /dev/null -H "Cookie: hl=$J" "http://127.0.0.1:$PORT/api/bucket/file?id=fotos-da-casa&key=pagina.html" | grep -qi "^content-type: text/plain" && curl -s -D- -o /dev/null -H "Cookie: hl=$J" "http://127.0.0.1:$PORT/api/bucket/file?id=fotos-da-casa&key=icone.svg" | grep -qi "^content-security-policy: sandbox" && curl -s -D- -o /dev/null -H "Cookie: hl=$J" "http://127.0.0.1:$PORT/api/bucket/file?id=fotos-da-casa&key=dados.bin" | grep -qi "^content-disposition: attachment"'
+check "bucket: Range devolve 206 com o trecho (vídeo/áudio)" 'curl -s -D "$T/hd" -o "$T/part" -H "Range: bytes=1-3" -H "Cookie: hl=$J" "http://127.0.0.1:$PORT/api/bucket/file?id=fotos-da-casa&key=a/b/c.txt"; head -1 "$T/hd" | grep -q 206 && grep -qi "^content-range: bytes 1-3/5" "$T/hd" && [ "$(cat "$T/part")" = ell ] && [ "$(curl -s -o /dev/null -w %{http_code} -H "Range: bytes=50-60" -H "Cookie: hl=$J" "http://127.0.0.1:$PORT/api/bucket/file?id=fotos-da-casa&key=a/b/c.txt")" = 416 ]'
+check "bucket: binário volta idêntico (upload e download byte a byte)" 'curl -s -H "Cookie: hl=$J" "http://127.0.0.1:$PORT/api/bucket/file?id=fotos-da-casa&key=dados.bin" | cmp - "$T/blob.bin"'
+check "bucket: o beto não lê nem grava no bucket privado da ana" '[ "$(BK=$H bkget "file?id=fotos-da-casa&key=a/b/c.txt" -o /dev/null -w %{http_code})" = 404 ] && BK=$H bkup fotos-da-casa "zzz.txt" "$T/c.txt" | grep -q "não encontrado" && [ ! -e "$APP/buckets/fotos-da-casa/zzz.txt" ]'
+check "bucket: sem login => 401; bucket privado não abre por /b/" '[ "$(curl -s -o /dev/null -w %{http_code} "http://127.0.0.1:$PORT/api/bucket/list?id=fotos-da-casa")" = 401 ] && [ "$(curl -s -o /dev/null -w %{http_code} "http://127.0.0.1:$PORT/b/fotos-da-casa/a/b/c.txt")" = 404 ]'
+check "bucket: tornar público abre /b/<id>/<caminho> sem login" 'bkapi fotos-da-casa update --data-urlencode pub=1 | grep -q ok && [ "$(curl -s "http://127.0.0.1:$PORT/b/fotos-da-casa/a/b/c.txt")" = hello ] && grep -q "public=1" "$APP/buckets/fotos-da-casa.conf"'
+check "bucket público: pelo túnel (cabeçalho do Cloudflare) continua fechado; caminho com .. também" '[ "$(curl -s -o /dev/null -w %{http_code} -H "CF-Connecting-IP: 1.2.3.4" "http://127.0.0.1:$PORT/b/fotos-da-casa/a/b/c.txt")" = 404 ] && [ "$(curl -s -o /dev/null -w %{http_code} --path-as-is "http://127.0.0.1:$PORT/b/fotos-da-casa/../../hosting.conf")" = 404 ] && [ "$(curl -s -o /dev/null -w %{http_code} "http://127.0.0.1:$PORT/b/nao-existe/x")" = 404 ]'
+check "bucket: mkdir, renomear/mover (sem sobrescrever) e apagar arquivo" 'bkapi fotos-da-casa mkdir --data-urlencode key=docs/2026 | grep -q ok && bkapi fotos-da-casa mv --data-urlencode key=a/b/c.txt --data-urlencode to=docs/2026/novo.txt | grep -q ok && [ "$(cat "$APP/buckets/fotos-da-casa/docs/2026/novo.txt")" = hello ] && bkapi fotos-da-casa mv --data-urlencode key=pagina.html --data-urlencode to=docs/2026/novo.txt | grep -q "Já existe" && [ -e "$APP/buckets/fotos-da-casa/pagina.html" ] && bkapi fotos-da-casa rm --data-urlencode key=pagina.html | grep -q ok && [ ! -e "$APP/buckets/fotos-da-casa/pagina.html" ]'
+check "bucket: apagar pasta leva o conteúdo e o total é recalculado" 'bkapi fotos-da-casa rm --data-urlencode key=docs | grep -q ok && [ ! -e "$APP/buckets/fotos-da-casa/docs" ] && api ana GET /api/overview | python3 -c "import sys,json; b=[x for x in json.load(sys.stdin)[\"buckets\"] if x[\"id\"]==\"fotos-da-casa\"][0]; assert b[\"files\"]==2 and b[\"bytes\"]==3000+$(stat -c %s "$T/i.svg"), b"'
+check "bucket compartilhado: o beto envia e a ana enxerga" 'curl -s -m 10 -X POST -H "Cookie: hl=$H" -H "X-Requested-With: hosting" --data-urlencode "name=Comum" --data-urlencode scope=shared http://127.0.0.1:$PORT/api/bucket/create | grep -q ok && BK=$H bkup comum "nós/ação.txt" "$T/c.txt" | grep -q ok && [ "$(bkget "file?id=comum&key=$(enc "nós/ação.txt")")" = hello ] && curl -s -D- -o /dev/null -H "Cookie: hl=$J" "http://127.0.0.1:$PORT/api/bucket/file?id=comum&key=$(enc "nós/ação.txt")&dl=1" | grep -q "filename\*=UTF-8..n%C3%B3s\|filename\*=UTF-8..a%C3%A7%C3%A3o.txt"'
+check "bucket: POST sem X-Requested-With => 403" '[ "$(curl -s -o /dev/null -w %{http_code} -X POST -H "Cookie: hl=$J" --data-binary @"$T/c.txt" "http://127.0.0.1:$PORT/api/bucket/upload?id=comum&key=x")" = 403 ]'
+stop_hosting; "$T/hosting" -c "$T/hosting.conf" 2>>"$T/err.log" & sleep 3
+check "bucket: configuração e totais sobrevivem ao reinício" 'api ana GET /api/overview | python3 -c "import sys,json; b={x[\"id\"]:x for x in json.load(sys.stdin)[\"buckets\"]}; assert b[\"fotos-da-casa\"][\"public\"]==1 and b[\"fotos-da-casa\"][\"files\"]==2 and \"comum\" in b"'
+check "bucket: apagar remove pasta e configuração (beto não apaga o da ana)" 'BK=$H bkapi fotos-da-casa delete | grep -q "não encontrado" && [ -d "$APP/buckets/fotos-da-casa" ] && bkapi fotos-da-casa delete | grep -q ok && [ ! -e "$APP/buckets/fotos-da-casa" ] && [ ! -e "$APP/buckets/fotos-da-casa.conf" ] && ! api ana GET /api/overview | grep -q fotos-da-casa'
 
 stop_hosting
 check "ao desligar as estatísticas são gravadas (hora atual e tops do dia)" '[ -s "$APP/apps/estatico/stats.cur" ] && ls "$APP"/apps/estatico/top-*.tsv >/dev/null'

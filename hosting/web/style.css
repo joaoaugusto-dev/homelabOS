@@ -302,3 +302,79 @@ dialog { max-width: calc(100vw - 16px); }
 .st-top li b { font-weight: 500; font-feature-settings: "tnum" 1; }
 .st-apps { overflow-x: auto; }
 @media (max-width: 860px) { .kpi-v { font-size: 24px; } .st-tip { font-size: 12px; } }
+
+/* ---------- histórico de deploys ---------- */
+.dp-card { padding: 6px 8px; overflow-x: auto; }
+.dp th, .dp td { white-space: nowrap; }
+.dp th.r, .dp td.r { text-align: right; }
+.dp td.dp-msg { white-space: normal; min-width: 200px; max-width: 460px; overflow-wrap: anywhere; }
+.dp td b { color: var(--t1); font-weight: 500; }
+.dp tr.click { cursor: pointer; transition: background-color .15s; }
+@media (hover: hover) and (pointer: fine) { .dp tr.click:hover { background: var(--s2); } }
+.dp-st { display: inline-flex; align-items: center; gap: 8px; color: var(--t1); font-weight: 500; }
+.dp-st i { width: 8px; height: 8px; border-radius: 50%; background: var(--t1); flex: none; }
+.dp-st.bad i { width: 15px; height: 15px; display: grid; place-items: center; background: var(--t1); color: #000; font-size: 10.5px; font-weight: 700; line-height: 1; font-style: normal; }
+.dp-st.bad i::before { content: "!"; }
+.dp-st.run i { animation: blink 1.1s ease-in-out infinite; }
+
+/* ---------- explorador de banco ---------- */
+.crumbs { display: flex; align-items: center; gap: 8px; min-width: 0; flex-wrap: wrap; color: var(--t3); }
+.crumbs a { color: var(--t2); text-decoration: none; }
+.crumbs b { color: var(--t1); font-weight: 600; overflow-wrap: anywhere; }
+@media (hover: hover) and (pointer: fine) { .crumbs a:hover { color: var(--t1); text-decoration: underline; text-underline-offset: 3px; } }
+.dbx { display: grid; grid-template-columns: 250px minmax(0, 1fr); gap: 14px; align-items: start; }
+.dbx-tables { padding: 14px 10px; position: sticky; top: 16px; max-height: calc(100dvh - 40px); overflow: auto; }
+.dbx-tables .card-h { padding: 0 8px; margin-bottom: 8px; }
+.dbx-tables ul { list-style: none; padding: 0; display: grid; gap: 2px; }
+.dbx-tables li button { display: flex; align-items: center; gap: 9px; width: 100%; height: 34px; padding: 0 9px; border-radius: 8px; color: var(--t2); text-align: left; transition: background-color .15s, color .15s; }
+.dbx-tables li button.on { background: var(--s3); color: var(--t1); }
+.dbx-tables li .k { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dbx-tables li small { color: var(--t3); font-size: 11.5px; flex: none; }
+.dbx-tables li .ic { color: var(--t3); }
+@media (hover: hover) and (pointer: fine) { .dbx-tables li button:not(.on):hover { background: var(--s2); color: var(--t1); } }
+.dbx-main { min-width: 0; display: grid; gap: 12px; }
+.grid-w { overflow: auto; max-height: min(66dvh, 640px); border: 1px solid var(--line); border-radius: 12px; background: var(--s1); }
+.grid { border-collapse: separate; border-spacing: 0; width: max-content; min-width: 100%; font-size: 13px; }
+.grid th { position: sticky; top: 0; z-index: 1; text-align: left; padding: 9px 12px; background: var(--s2); color: var(--t2); font-weight: 500; border-bottom: 1px solid var(--line2); white-space: nowrap; }
+.grid th.srt { cursor: pointer; user-select: none; }
+@media (hover: hover) and (pointer: fine) { .grid th.srt:hover { color: var(--t1); } .grid td:hover { background: var(--s2); } }
+.grid td { max-width: 340px; padding: 7px 12px; border-bottom: 1px solid var(--line); color: var(--t1); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: 12.5px ui-monospace, "SF Mono", Menlo, monospace; cursor: copy; }
+.grid .nul { color: var(--t3); font-style: italic; font-size: 12px; }
+.pager { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.pager .sp, .sql-bar .sp { flex: 1; }
+.notice.err { color: var(--t1); border-color: var(--t3); white-space: pre-wrap; overflow-wrap: anywhere; font: 12.5px/1.5 ui-monospace, "SF Mono", Menlo, monospace; }
+.sqlcard { display: grid; gap: 10px; }
+.sqlbox { width: 100%; min-height: 120px; padding: 12px 14px; border: 1px solid var(--line2); border-radius: 10px; background: #000; color: var(--t1); font: 13px/1.55 ui-monospace, "SF Mono", Menlo, monospace; resize: vertical; outline: none; }
+.sqlbox:focus { border-color: var(--t2); }
+.sql-bar { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.inl { display: inline-flex; align-items: center; gap: 8px; color: var(--t2); font-size: 13px; cursor: pointer; }
+.inl input { accent-color: #fff; width: 16px; height: 16px; }
+.sql-out { display: grid; gap: 8px; }
+@media (max-width: 860px) { .dbx { grid-template-columns: 1fr; } .dbx-tables { position: static; max-height: 220px; } }
+
+/* ---------- buckets ---------- */
+.acard.click { cursor: pointer; transition: border-color .15s, background-color .15s; }
+@media (hover: hover) and (pointer: fine) { .acard.click:hover { border-color: var(--line2); background: var(--s2); } }
+.bk-actions { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.bk-drop { position: relative; min-height: 220px; border: 1.5px dashed transparent; border-radius: 16px; transition: border-color .15s, background-color .15s; }
+.bk-drop.over { border-color: var(--t2); background: var(--s1); }
+.bk-up { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; padding: 10px 14px; border: 1px solid var(--line2); border-radius: 12px; background: var(--s2); color: var(--t2); font-size: 13px; }
+.bk-up span { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bk-up progress { width: 160px; height: 6px; accent-color: #fff; }
+.bk-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 168px), 1fr)); gap: 12px; }
+.bk-tile { position: relative; border: 1px solid var(--line); border-radius: 14px; background: var(--s1); overflow: hidden; transition: border-color .15s; }
+@media (hover: hover) and (pointer: fine) { .bk-tile:hover { border-color: var(--line2); } .bk-tile:hover .bk-tb, .bk-tile:focus-within .bk-tb { opacity: 1; } }
+.bk-hit { display: grid; gap: 2px; padding: 0 0 10px; cursor: pointer; outline-offset: -2px; }
+.bk-hit b { padding: 0 12px; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bk-hit small { padding: 0 12px; color: var(--t3); font-size: 12px; }
+.bk-prev { display: grid; place-items: center; aspect-ratio: 4 / 3; margin-bottom: 8px; background: var(--s2); color: var(--t3); overflow: hidden; }
+.bk-prev img { width: 100%; height: 100%; object-fit: cover; }
+.bk-prev .ic { width: 34px; height: 34px; }
+.bk-prev span { font: 600 13px ui-monospace, monospace; text-transform: uppercase; letter-spacing: .04em; padding: 6px 10px; border: 1px solid var(--line2); border-radius: 8px; }
+.bk-tb { position: absolute; top: 6px; right: 6px; display: flex; gap: 2px; padding: 2px; border-radius: 10px; background: rgba(0,0,0,.78); backdrop-filter: blur(8px); opacity: 0; transition: opacity .15s; }
+@media (hover: none) { .bk-tb { opacity: 1; } }
+.bk-tb .icon-btn { width: 28px; height: 28px; }
+.pv-body { display: grid; place-items: center; padding: 0 24px 24px; min-height: 0; }
+.pv-body img, .pv-body video { max-width: 100%; max-height: 72dvh; border-radius: 10px; }
+.pv-body audio { width: min(100%, 420px); }
+@media (max-width: 860px) { .pv-body { padding: 0 14px 18px; } .bk-up progress { width: 90px; } }

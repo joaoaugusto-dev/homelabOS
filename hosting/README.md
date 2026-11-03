@@ -81,13 +81,31 @@ PostgreSQL e MariaDB locais. Criar um banco gera usuário + senha aleatória (o 
 
 **Administrador dos bancos**: rode `sudo bash deploy/db-admin.sh <usuário> <pasta data>`. Ele cria `hosting_admin` com senha em `data/pgpass` e `data/mysql.cnf` (0600), e o hosting entra por TCP no loopback. Sem esses arquivos vale o modo antigo (usuário do serviço pelo socket local), que qualquer processo desse usuário também alcança.
 
+### Explorar o banco pelo painel
+Em **Bancos → Explorar**: lista de tabelas (com linhas estimadas), **Dados** (50 por página, ordenar clicando no cabeçalho), **Estrutura** (colunas, tipos, chave primária) e **SQL**.
+- **Roda como o usuário do próprio banco** (`h_<nome>`, senha só no ambiente do processo), nunca como `hosting_admin`: ele só enxerga o banco dele. Consulta passa de 20 s é cancelada; no máximo 1000 linhas por resultado.
+- O console SQL é **somente leitura por padrão**; desmarcar libera escrita (e `DROP`/`DELETE`/`ALTER`/`TRUNCATE` pedem confirmação). É **um comando por vez**.
+- **Meta-comandos**: o `psql -c '\! cmd'` e o `\!`/`system` do cliente do MySQL executam shell. No PostgreSQL o SQL vai por `-c` precedido de um espaço, então uma barra invertida nunca é interpretada. No MySQL o console livre só vale para quem já pode rodar comandos no servidor (administrador e `native_users`); Dados e Estrutura valem para todos.
+- API: `GET /api/db/view?id=&what=tables|rows|cols&t=&s=&page=&sort=&dir=`, `POST /api/db/sql` (`id`, `sql`, `ro=1|0`).
+
+## Histórico de deploys
+A seção **Deploys** reúne, de todas as aplicações que você vê, cada deploy (manual, webhook, verificação ou envio de arquivo) com resultado, commit, duração e quando, mais os que estão em andamento. Clique numa linha para ler o **log daquele deploy**: o `deploy.log` é sobrescrito a cada build, então uma cópia de cada um fica em `apps/<id>/deploys/<instante>.log` (os **30** mais recentes por app; o `history.tsv` não é podado).
+API: `GET /api/deploys?app=&limit=`, `GET /api/deploy/log?id=&ts=`.
+
+## Buckets (arquivos e imagens)
+A seção **Arquivos** guarda arquivos de qualquer tipo em buckets (`data/buckets/<id>/`), privados ou compartilhados como o resto: pastas, envio de vários arquivos ou de uma pasta inteira (arrastar e soltar), miniaturas de imagem, visualização de imagem/vídeo/áudio/PDF/texto, renomear/mover, baixar e apagar. Até 2 GB por arquivo.
+- **Público na rede local** (opcional, por bucket): `GET /b/<bucket>/<caminho>` abre o arquivo **sem login** para quem alcança a porta do painel (LAN/Tailscale). **Nunca pelo túnel**: pedidos com `Cf-Connecting-Ip`/`X-Forwarded-*` só alcançam `/hook/`.
+- **Segurança dos arquivos**: caminhos sem `..`, sem `.`, sem segmento vazio e sem controle; além disso o caminho é resolvido com `realpath` e precisa ficar dentro do bucket (uma pasta-link para fora não vaza nem aceita escrita). HTML, JS, CSS e XML enviados são servidos como `text/plain`, SVG com `Content-Security-Policy: sandbox` e `nosniff` em tudo; o que o navegador não abre vira download. Há suporte a `Range` (vídeo e áudio andam).
+- Os apps **não** enxergam `data/` (sandbox): o acesso é pelo painel, por `Authorization: Bearer` (token de API) ou pelo link público.
+- API: `GET /api/bucket/list|file`, `POST /api/bucket/create|update|delete|upload|rm|mv|mkdir`.
+
 ## Configuração (`hosting.conf`)
 Veja [`hosting.conf.example`](hosting.conf.example): `port`, `bind` (padrão `127.0.0.1`), `web`, `data`, `dash_ports`, `admin`, `native_users`, `cert_domain`, `tunnel`, `sandbox`, `behind_proxy`.
 
 ## Pastas (dentro de `data/`, 0700)
 ```
-apps/<id>/app.conf  src/  deploy.log  run.log  history.tsv  data/  home/  stats.tsv  stats.cur  top-<dia>.tsv
-stats.salt  api_token  pgpass  mysql.cnf  dbs/<id>.conf  domains.conf  settings.conf  tunnel.id  tunnel.yml  tunnel.log
+apps/<id>/app.conf  src/  deploy.log  deploys/<instante>.log  run.log  history.tsv  data/  home/  stats.tsv  stats.cur  top-<dia>.tsv
+stats.salt  api_token  pgpass  mysql.cnf  dbs/<id>.conf  buckets/<id>.conf  buckets/<id>/  domains.conf  settings.conf  tunnel.id  tunnel.yml  tunnel.log
 ```
 
 ## Instalar e testar
